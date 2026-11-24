@@ -1,0 +1,16 @@
+# Dependencias
+node_modules/
+
+# Datos locales: base de datos y fotos subidas (nunca se suben al repo)
+data/
+uploads/
+
+# Secretos y configuración local
+.env
+.env.*
+.claude/settings.local.json
+
+# Varios
+*.log
+.DS_Store
+Thumbs.db
