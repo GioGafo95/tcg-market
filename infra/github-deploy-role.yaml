@@ -4,9 +4,11 @@ Description: >
   Solo lo puede usar el environment "qa" del repositorio (restringido a la rama main), y solo sobre los recursos de QA.
 
 Parameters:
-  GitHubRepo:
+  GitHubSubjectPrefix:
     Type: String
-    Default: GioGafo95/tcg-market
+    # Formato "inmutable" de GitHub (usuario@id/repo@id): no se puede suplantar renombrando cuentas o repos.
+    # Se consulta con: gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+    Default: repo:GioGafo95@42852664/tcg-market@1470894086
   EnvName:
     Type: String
     Default: qa
@@ -30,7 +32,7 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 # Solo jobs del environment "qa" de GitHub, que a su vez solo acepta la rama main
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${EnvName}
+                token.actions.githubusercontent.com:sub: !Sub ${GitHubSubjectPrefix}:environment:${EnvName}
       Policies:
         - PolicyName: deploy-qa
           PolicyDocument:
