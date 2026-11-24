@@ -7,8 +7,8 @@
 // 4. Da al rol de la función permisos mínimos sobre la tabla y el bucket
 //
 // Requisitos: AWS CLI v2 reciente (con "aws lambda-web") y credenciales configuradas.
-import { execFileSync } from 'node:child_process';
-import { cpSync, rmSync, mkdirSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { cpSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
 
 const REGION = process.env.AWS_REGION || 'us-east-1';
 const ENV = 'qa';
@@ -50,9 +50,32 @@ console.log(`  tabla: ${out.TableName}\n  bucket: ${out.BucketName}`);
 step('Empaquetando la app');
 rmSync('.build', { recursive: true, force: true });
 mkdirSync('.build');
-for (const p of ['package.json', 'package-lock.json', 'server.js', 'cards.js', 'storage', 'public']) cpSync(p, `.build/${p}`, { recursive: true });
+// Todo el código de la raíz (*.js) más las carpetas de la app; así un archivo nuevo no se queda fuera
+const rootJs = readdirSync('.').filter(f => f.endsWith('.js'));
+for (const p of ['package.json', 'package-lock.json', ...rootJs, 'storage', 'public']) cpSync(p, `.build/${p}`, { recursive: true });
+console.log(`  incluidos: ${rootJs.join(', ')}, storage/, public/`);
 execFileSync(process.platform === 'win32' ? 'npm.cmd ci --omit=dev --no-fund --no-audit' : 'npm ci --omit=dev --no-fund --no-audit',
   { cwd: '.build', stdio: 'inherit', shell: true });
+
+// Seguro: arrancar el paquete tal cual se va a subir; si falta un archivo o dependencia, no se despliega
+step('Verificando que el paquete arranca');
+await new Promise((resolve, reject) => {
+  const proc = spawn(process.execPath, ['server.js'], { cwd: '.build', env: { ...process.env, PORT: '3999', STORAGE: 'local' } });
+  let log = '';
+  proc.stdout.on('data', d => (log += d)); proc.stderr.on('data', d => (log += d));
+  const deadline = Date.now() + 20000;
+  const probe = async () => {
+    try {
+      const r = await fetch('http://127.0.0.1:3999/healthz');
+      if (r.ok) { proc.kill(); console.log('  el paquete arranca correctamente'); return resolve(); }
+    } catch { /* aún no escucha */ }
+    if (proc.exitCode !== null || Date.now() > deadline) { proc.kill(); return reject(new Error(`El paquete no arranca:\n${log}`)); }
+    setTimeout(probe, 300);
+  };
+  probe();
+});
+rmSync('.build/data', { recursive: true, force: true });
+rmSync('.build/uploads', { recursive: true, force: true });
 
 step(`Desplegando la Web Function ${FUNCTION}`);
 aws(['lambda-web', 'deploy', '--name', FUNCTION, '--code', '.build', '--create',
