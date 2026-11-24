@@ -52,16 +52,16 @@ function marketCompare(price, market) {
     : `<span class="cmp high">${diff}% sobre mercado</span>`;
 }
 
-// Reduce las fotos en el navegador antes de subirlas (máx. 1600 px, JPEG)
+// Reduce las fotos en el navegador antes de subirlas (máx. 1400 px, JPEG)
 async function compressImage(file) {
   const bmp = await createImageBitmap(file);
-  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const scale = Math.min(1, 1400 / Math.max(bmp.width, bmp.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(bmp.width * scale);
   canvas.height = Math.round(bmp.height * scale);
   canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
   bmp.close?.();
-  return canvas.toDataURL('image/jpeg', 0.85);
+  return canvas.toDataURL('image/jpeg', 0.82);
 }
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -366,7 +366,7 @@ async function viewMine() {
     toast('Publicación borrada'); viewMine();
   }));
   $app.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', async () => {
-    const l = listings.find(x => x.id === Number(b.dataset.toggle));
+    const l = listings.find(x => String(x.id) === b.dataset.toggle);
     await api(`/api/listings/${l.id}/status`, { method: 'PATCH', body: { status: l.status === 'sold' ? 'available' : 'sold' } });
     toast('Publicación actualizada'); viewMine();
   }));

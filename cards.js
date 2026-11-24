@@ -3,11 +3,7 @@
 //  - Yu-Gi-Oh!: db.ygoprodeck.com  (precio de TCGplayer por edición/set, USD)
 // Collectr no ofrece una API pública, por eso se usa TCGplayer como referencia de mercado.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const REF_DIR = 'uploads/ref';
-mkdirSync(REF_DIR, { recursive: true });
+import { putFile, fileExists, publicUrl } from './storage/files.js';
 
 const cache = new Map();
 const CACHE_MS = 10 * 60 * 1000;
@@ -155,15 +151,14 @@ export async function getCardByRef(game, refId) {
 export async function cacheRefImage(game, url) {
   if (!/^https:\/\/(images\.pokemontcg\.io|images\.ygoprodeck\.com|assets\.tcgdex\.net)\//.test(url || '')) return '';
   const ext = url.endsWith('.png') ? '.png' : url.endsWith('.webp') ? '.webp' : '.jpg';
-  const name = `${game}-${createHash('sha1').update(url).digest('hex').slice(0, 20)}${ext}`;
-  const path = join(REF_DIR, name);
-  if (!existsSync(path)) {
+  const key = `ref/${game}-${createHash('sha1').update(url).digest('hex').slice(0, 20)}${ext}`;
+  if (!(await fileExists(key))) {
     const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
     const type = res.headers.get('content-type') || '';
     if (!res.ok || !type.startsWith('image/')) return '';
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length > 5 * 1024 * 1024) return '';
-    writeFileSync(path, buf);
+    await putFile(key, buf, type);
   }
-  return `/${REF_DIR}/${name}`;
+  return publicUrl(key);
 }

@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  TCG Market - ambiente serverless (datos y archivos). La app corre como Lambda Web Function,
+  que se crea con "aws lambda-web deploy" (ver scripts/deploy-qa.mjs). Todo es pago por uso.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: qa
+    AllowedPattern: '[a-z0-9-]+'
+  WebFunctionName:
+    Type: String
+    Default: tcg-market-qa
+  WebFunctionRoleName:
+    Type: String
+    Default: ''
+    Description: Rol de ejecución de la Web Function (lo crea el primer despliegue). Vacío = aún no existe.
+
+Conditions:
+  HasRole: !Not [!Equals [!Ref WebFunctionRoleName, '']]
+
+Resources:
+  # Tabla única, modo bajo demanda: sin costo fijo, se paga por petición. Sin backups continuos (QA).
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub tcg-market-${EnvName}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+        - { AttributeName: GSI1PK, AttributeType: S }
+        - { AttributeName: GSI1SK, AttributeType: S }
+        - { AttributeName: GSI2PK, AttributeType: S }
+        - { AttributeName: GSI2SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1   # cartas por vendedor
+          KeySchema:
+            - { AttributeName: GSI1PK, KeyType: HASH }
+            - { AttributeName: GSI1SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: GSI2   # catálogo completo ordenado por fecha
+          KeySchema:
+            - { AttributeName: GSI2PK, KeyType: HASH }
+            - { AttributeName: GSI2SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }   # sesiones caducadas se borran solas
+      SSESpecification: { SSEEnabled: true }
+      Tags:
+        - { Key: app, Value: tcg-market }
+        - { Key: env, Value: !Ref EnvName }
+
+  # Fotos de los vendedores e imágenes oficiales. Privado: la app entrega URLs firmadas temporales.
+  Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub tcg-market-${EnvName}-files-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      LifecycleConfiguration:
+        Rules:
+          - Id: limpiar-subidas-incompletas
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+      Tags:
+        - { Key: app, Value: tcg-market }
+        - { Key: env, Value: !Ref EnvName }
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SoloHTTPS
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt Bucket.Arn, !Sub '${Bucket.Arn}/*']
+            Condition: { Bool: { 'aws:SecureTransport': 'false' } }
+
+  # Logs de la app con retención corta para que no acumulen costo
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/web/${WebFunctionName}
+      RetentionInDays: 14
+
+  # Permisos mínimos de la app sobre su tabla y su bucket
+  AppPolicy:
+    Type: AWS::IAM::RolePolicy
+    Condition: HasRole
+    Properties:
+      RoleName: !Ref WebFunctionRoleName
+      PolicyName: !Sub tcg-market-${EnvName}-data
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Tabla
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+              - dynamodb:BatchGetItem
+              - dynamodb:ConditionCheckItem
+            Resource: [!GetAtt Table.Arn, !Sub '${Table.Arn}/index/*']
+          - Sid: Archivos
+            Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+            Resource: !Sub '${Bucket.Arn}/*'
+          - Sid: ListarParaHead
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt Bucket.Arn
+
+Outputs:
+  TableName:
+    Value: !Ref Table
+  BucketName:
+    Value: !Ref Bucket
+  LogGroupName:
+    Value: !Ref LogGroup

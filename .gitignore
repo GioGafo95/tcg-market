@@ -5,6 +5,9 @@ node_modules/
 data/
 uploads/
 
+# Paquete temporal de despliegue
+.build/
+
 # Secretos y configuración local
 .env
 .env.*
