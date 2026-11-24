@@ -278,6 +278,21 @@ async function viewSeller(username) {
                       : '<div class="empty">Este usuario no tiene cartas a la venta.</div>'}`;
 }
 
+// Campos de perfil obligatorios (registro y "Mi perfil"): nombre y apellidos, zona y teléfono
+function profileFields(u) {
+  return `
+    <div class="field"><label>Nombre y apellidos</label>
+      <input name="display_name" required maxlength="80" autocomplete="name" value="${esc(u.display_name)}" placeholder="ej. Ash Ketchum"></div>
+    <div class="row">
+      <div class="field"><label>Ciudad / zona</label>
+        <input name="location" required minlength="2" maxlength="80" value="${esc(u.location)}" placeholder="ej. Ciudad de México"></div>
+      <div class="field"><label>Contacto</label>
+        <input name="contact" type="tel" required maxlength="30" autocomplete="tel" inputmode="tel"
+               pattern="\\+?[0-9\\s\\(\\)\\.\\-]{8,25}" title="Número de teléfono: 8 a 15 dígitos, puede empezar con +"
+               value="${esc(u.contact)}" placeholder="Número de teléfono"></div>
+    </div>`;
+}
+
 function viewRegister() {
   $app.innerHTML = `
     <div class="panel auth">
@@ -285,13 +300,9 @@ function viewRegister() {
       <p class="muted">Regístrate para publicar las cartas que vendes.</p>
       <form id="f">
         <div class="field"><label>Usuario</label><input name="username" required minlength="3" maxlength="30" pattern="[A-Za-z0-9_]+" autocomplete="username" placeholder="ej. ash_ketchum"></div>
-        <div class="field"><label>Nombre visible</label><input name="display_name" maxlength="60" placeholder="Opcional"></div>
+        ${profileFields({})}
         <div class="field"><label>Correo electrónico</label><input name="email" type="email" required autocomplete="email"></div>
         <div class="field"><label>Contraseña (mín. 8 caracteres)</label><input name="password" type="password" required minlength="8" autocomplete="new-password"></div>
-        <div class="row">
-          <div class="field"><label>Ciudad / zona</label><input name="location" maxlength="80" placeholder="Opcional"></div>
-          <div class="field"><label>Contacto para compradores</label><input name="contact" maxlength="120" placeholder="WhatsApp, Instagram…"></div>
-        </div>
         <div class="error" id="err"></div>
         <button class="btn primary" style="width:100%">Crear cuenta</button>
       </form>
@@ -572,9 +583,7 @@ function viewProfile() {
       <h1>Mi perfil</h1>
       <p class="muted">Lo que pongas aquí lo verán los compradores. <a href="#/vendedor/${encodeURIComponent(u.username)}">Ver mi perfil público</a></p>
       <form id="f">
-        <div class="field"><label>Nombre visible</label><input name="display_name" maxlength="60" value="${esc(u.display_name)}"></div>
-        <div class="field"><label>Ciudad / zona</label><input name="location" maxlength="80" value="${esc(u.location)}"></div>
-        <div class="field"><label>Contacto para compradores</label><input name="contact" maxlength="120" value="${esc(u.contact)}" placeholder="WhatsApp, Instagram, correo…"></div>
+        ${profileFields(u)}
         <div class="error" id="err"></div>
         <button class="btn primary">Guardar</button>
       </form>

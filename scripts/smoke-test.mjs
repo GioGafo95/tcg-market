@@ -39,11 +39,18 @@ const run = async () => {
   }
 
   const u = `smoke_${Date.now().toString(36)}`;
-  await call('/api/auth/register', { method: 'POST', expect: 201,
-    body: { username: u, email: `${u}@example.test`, password: 'smoketest123', contact: 'prueba' } });
-  ok(`registro de ${u}`);
+  const profile = { display_name: 'Prueba Automática', location: 'Ciudad de Prueba', contact: '+52 55 1234 5678' };
+  await call('/api/auth/register', { method: 'POST', expect: 400,
+    body: { username: u, email: `${u}@example.test`, password: 'smoketest123', display_name: 'Solo', location: '', contact: 'insta' } });
+  ok('registro sin nombre completo, zona ni teléfono rechazado');
+  const reg = await call('/api/auth/register', { method: 'POST', expect: 201,
+    body: { username: u, email: `${u}@example.test`, password: 'smoketest123', ...profile } });
+  if (reg.data.user.contact !== '+525512345678') throw new Error(`teléfono no normalizado: ${reg.data.user.contact}`);
+  ok(`registro de ${u} (teléfono guardado como ${reg.data.user.contact})`);
+  await call('/api/auth/me', { method: 'PUT', expect: 400, body: { ...profile, contact: '' } });
+  ok('perfil sin teléfono rechazado');
   await call('/api/auth/register', { method: 'POST', expect: 409,
-    body: { username: u, email: `${u}@example.test`, password: 'smoketest123' } });
+    body: { username: u, email: `${u}@example.test`, password: 'smoketest123', ...profile } });
   ok('usuario duplicado rechazado');
 
   await call('/api/listings', { method: 'POST', expect: 400, body: { game: 'pokemon', card_name: 'X', price: 1 } });

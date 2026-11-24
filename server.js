@@ -63,6 +63,21 @@ const publicUser = u => u && ({
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const sameId = (a, b) => String(a) === String(b);
 
+// Datos de perfil obligatorios: nombre y apellidos, zona y teléfono de contacto
+function validateProfile(body) {
+  const display_name = str(body.display_name, 80).replace(/\s+/g, ' ');
+  const location = str(body.location, 80).replace(/\s+/g, ' ');
+  const rawPhone = str(body.contact, 30);
+  const contact = rawPhone.replace(/[\s().-]/g, '');
+
+  if (!/^\p{L}[\p{L}'. -]*$/u.test(display_name) || display_name.split(' ').filter(w => w.length > 1).length < 2)
+    throw new HttpError(400, 'Escribe tu nombre y apellidos (solo letras).');
+  if (location.length < 2) throw new HttpError(400, 'Indica tu ciudad o zona.');
+  if (!/^\+?\d{8,15}$/.test(contact))
+    throw new HttpError(400, 'Escribe un número de teléfono válido (8 a 15 dígitos, puede empezar con +).');
+  return { display_name, location, contact };
+}
+
 // Decodifica, valida (por contenido real, no solo por la extensión) y guarda una foto
 function decodePhoto(dataUrl) {
   const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(typeof dataUrl === 'string' ? dataUrl : '');
@@ -103,19 +118,16 @@ app.post('/api/auth/register', async (req, res) => {
   const username = str(req.body.username, 30);
   const email = str(req.body.email, 120).toLowerCase();
   const password = typeof req.body.password === 'string' ? req.body.password : '';
-  const display_name = str(req.body.display_name, 60) || username;
 
   if (!/^[a-zA-Z0-9_]{3,30}$/.test(username))
     throw new HttpError(400, 'El usuario debe tener 3-30 caracteres: letras, números o _.');
+  const profile = validateProfile(req.body);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Correo electrónico no válido.');
   if (password.length < 8) throw new HttpError(400, 'La contraseña debe tener al menos 8 caracteres.');
 
   let user;
   try {
-    user = await repo.createUser({
-      username, email, password_hash: hashPassword(password), display_name,
-      location: str(req.body.location, 80), contact: str(req.body.contact, 120),
-    });
+    user = await repo.createUser({ username, email, password_hash: hashPassword(password), ...profile });
   } catch (err) {
     if (err.code === 'DUPLICATE') throw new HttpError(409, 'Ese usuario o correo ya está registrado.');
     throw err;
@@ -143,10 +155,7 @@ app.post('/api/auth/logout', async (req, res) => {
 app.get('/api/auth/me', (req, res) => res.json({ user: publicUser(req.user) || null }));
 
 app.put('/api/auth/me', requireAuth, async (req, res) => {
-  const user = await repo.updateUser(req.user.id, {
-    display_name: str(req.body.display_name, 60) || req.user.username,
-    location: str(req.body.location, 80), contact: str(req.body.contact, 120),
-  });
+  const user = await repo.updateUser(req.user.id, validateProfile(req.body));
   res.json({ user: publicUser(user) });
 });
 
