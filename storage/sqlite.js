@@ -58,6 +58,10 @@ db.exec(`
 `);
 
 // Migraciones de columnas añadidas después de la primera versión
+const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+for (const name of ['first_name', 'last_name']) {
+  if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} TEXT DEFAULT ''`);
+}
 const cols = db.prepare('PRAGMA table_info(listings)').all().map(c => c.name);
 for (const [name, def] of Object.entries({
   ref_id: "TEXT DEFAULT ''", market_price: 'REAL', market_source: "TEXT DEFAULT ''", market_updated: 'TEXT',
@@ -95,8 +99,9 @@ export const repo = {
     const exists = db.prepare('SELECT 1 FROM users WHERE username = ? OR email = ?').get(u.username, u.email);
     if (exists) { const e = new Error('duplicate'); e.code = 'DUPLICATE'; throw e; }
     const { lastInsertRowid } = db.prepare(`
-      INSERT INTO users (username, email, password_hash, display_name, location, contact) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(u.username, u.email, u.password_hash, u.display_name, u.location, u.contact);
+      INSERT INTO users (username, email, password_hash, display_name, first_name, last_name, location, contact)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(u.username, u.email, u.password_hash, u.display_name, u.first_name, u.last_name, u.location, u.contact);
     return this.getUser(lastInsertRowid);
   },
   async getUser(id) { return userOut(db.prepare('SELECT * FROM users WHERE id = ?').get(id)); },
@@ -104,8 +109,9 @@ export const repo = {
   async findUserByLogin(login) {
     return userOut(db.prepare('SELECT * FROM users WHERE username = ? OR email = ?').get(login, login.toLowerCase()));
   },
-  async updateUser(id, { display_name, location, contact }) {
-    db.prepare('UPDATE users SET display_name = ?, location = ?, contact = ? WHERE id = ?').run(display_name, location, contact, id);
+  async updateUser(id, { display_name, first_name, last_name, location, contact }) {
+    db.prepare(`UPDATE users SET display_name = ?, first_name = ?, last_name = ?, location = ?, contact = ? WHERE id = ?`)
+      .run(display_name, first_name, last_name, location, contact, id);
     return this.getUser(id);
   },
 

@@ -112,12 +112,12 @@ export const repo = {
     return out.Item ? this.getUser(out.Item.userId) : null;
   },
 
-  async updateUser(id, { display_name, location, contact }) {
+  async updateUser(id, { display_name, first_name, last_name, location, contact }) {
     const out = await ddb.send(new UpdateCommand({
       TableName: TABLE, Key: { PK: `USER#${id}`, SK: 'PROFILE' },
-      UpdateExpression: 'SET display_name = :d, #loc = :l, contact = :c',
+      UpdateExpression: 'SET display_name = :d, first_name = :f, last_name = :a, #loc = :l, contact = :c',
       ExpressionAttributeNames: { '#loc': 'location' },
-      ExpressionAttributeValues: { ':d': display_name, ':l': location, ':c': contact },
+      ExpressionAttributeValues: { ':d': display_name, ':f': first_name, ':a': last_name, ':l': location, ':c': contact },
       ReturnValues: 'ALL_NEW',
     }));
     return strip(out.Attributes);

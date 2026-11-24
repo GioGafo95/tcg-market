@@ -39,14 +39,20 @@ const run = async () => {
   }
 
   const u = `smoke_${Date.now().toString(36)}`;
-  const profile = { display_name: 'Prueba Automática', location: 'Ciudad de Prueba', contact: '+52 55 1234 5678' };
+  const profile = { first_name: 'Prueba', last_name: 'Automática Pérez', location: 'Ciudad de Prueba', contact: '+52 55 1234 5678' };
   await call('/api/auth/register', { method: 'POST', expect: 400,
-    body: { username: u, email: `${u}@example.test`, password: 'smoketest123', display_name: 'Solo', location: '', contact: 'insta' } });
-  ok('registro sin nombre completo, zona ni teléfono rechazado');
+    body: { username: u, email: `${u}@example.test`, password: 'smoketest123', ...profile, last_name: '' } });
+  ok('registro sin apellidos rechazado');
+  await call('/api/auth/register', { method: 'POST', expect: 400,
+    body: { username: u, email: `${u}@example.test`, password: 'smoketest123', ...profile, location: '', contact: 'insta' } });
+  ok('registro sin zona ni teléfono rechazado');
   const reg = await call('/api/auth/register', { method: 'POST', expect: 201,
     body: { username: u, email: `${u}@example.test`, password: 'smoketest123', ...profile } });
-  if (reg.data.user.contact !== '+525512345678') throw new Error(`teléfono no normalizado: ${reg.data.user.contact}`);
-  ok(`registro de ${u} (teléfono guardado como ${reg.data.user.contact})`);
+  const ru = reg.data.user;
+  if (ru.contact !== '+525512345678') throw new Error(`teléfono no normalizado: ${ru.contact}`);
+  if (ru.first_name !== 'Prueba' || ru.last_name !== 'Automática Pérez' || ru.display_name !== 'Prueba Automática Pérez')
+    throw new Error(`nombre mal guardado: ${JSON.stringify(ru)}`);
+  ok(`registro de ${u}: ${ru.first_name} | ${ru.last_name} | tel ${ru.contact}`);
   await call('/api/auth/me', { method: 'PUT', expect: 400, body: { ...profile, contact: '' } });
   ok('perfil sin teléfono rechazado');
   await call('/api/auth/register', { method: 'POST', expect: 409,

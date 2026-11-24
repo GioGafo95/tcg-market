@@ -57,25 +57,28 @@ async function createSession(res, userId) {
 
 const publicUser = u => u && ({
   id: u.id, username: u.username, display_name: u.display_name,
+  first_name: u.first_name || '', last_name: u.last_name || '',
   location: u.location, contact: u.contact, created_at: u.created_at,
 });
 
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const sameId = (a, b) => String(a) === String(b);
 
-// Datos de perfil obligatorios: nombre y apellidos, zona y teléfono de contacto
+// Datos de perfil obligatorios: nombre, apellidos, zona y teléfono de contacto
+const NAME_RE = /^\p{L}[\p{L}'. -]*\p{L}\.?$/u;
 function validateProfile(body) {
-  const display_name = str(body.display_name, 80).replace(/\s+/g, ' ');
-  const location = str(body.location, 80).replace(/\s+/g, ' ');
-  const rawPhone = str(body.contact, 30);
-  const contact = rawPhone.replace(/[\s().-]/g, '');
+  const clean = (v, max) => str(v, max).replace(/\s+/g, ' ');
+  const first_name = clean(body.first_name, 40);
+  const last_name = clean(body.last_name, 60);
+  const location = clean(body.location, 80);
+  const contact = str(body.contact, 30).replace(/[\s().-]/g, '');
 
-  if (!/^\p{L}[\p{L}'. -]*$/u.test(display_name) || display_name.split(' ').filter(w => w.length > 1).length < 2)
-    throw new HttpError(400, 'Escribe tu nombre y apellidos (solo letras).');
+  if (!NAME_RE.test(first_name)) throw new HttpError(400, 'Escribe tu nombre (solo letras, mínimo 2).');
+  if (!NAME_RE.test(last_name)) throw new HttpError(400, 'Escribe tus apellidos (solo letras, mínimo 2).');
   if (location.length < 2) throw new HttpError(400, 'Indica tu ciudad o zona.');
   if (!/^\+?\d{8,15}$/.test(contact))
     throw new HttpError(400, 'Escribe un número de teléfono válido (8 a 15 dígitos, puede empezar con +).');
-  return { display_name, location, contact };
+  return { first_name, last_name, display_name: `${first_name} ${last_name}`, location, contact };
 }
 
 // Decodifica, valida (por contenido real, no solo por la extensión) y guarda una foto

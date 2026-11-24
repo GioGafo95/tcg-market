@@ -278,11 +278,19 @@ async function viewSeller(username) {
                       : '<div class="empty">Este usuario no tiene cartas a la venta.</div>'}`;
 }
 
-// Campos de perfil obligatorios (registro y "Mi perfil"): nombre y apellidos, zona y teléfono
+// Campos de perfil obligatorios (registro y "Mi perfil"): nombre, apellidos, zona y teléfono
 function profileFields(u) {
+  // Cuentas antiguas solo tienen el nombre completo: se reparte entre los dos campos
+  const [first = '', ...rest] = (u.first_name ? [] : (u.display_name || '').split(' '));
+  const firstName = u.first_name || first;
+  const lastName = u.last_name || rest.join(' ');
   return `
-    <div class="field"><label>Nombre y apellidos</label>
-      <input name="display_name" required maxlength="80" autocomplete="name" value="${esc(u.display_name)}" placeholder="ej. Ash Ketchum"></div>
+    <div class="row">
+      <div class="field"><label>Nombre</label>
+        <input name="first_name" required minlength="2" maxlength="40" autocomplete="given-name" value="${esc(firstName)}" placeholder="ej. Ash"></div>
+      <div class="field"><label>Apellidos</label>
+        <input name="last_name" required minlength="2" maxlength="60" autocomplete="family-name" value="${esc(lastName)}" placeholder="ej. Ketchum"></div>
+    </div>
     <div class="row">
       <div class="field"><label>Ciudad / zona</label>
         <input name="location" required minlength="2" maxlength="80" value="${esc(u.location)}" placeholder="ej. Ciudad de México"></div>
