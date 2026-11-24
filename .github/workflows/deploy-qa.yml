@@ -1,0 +1,72 @@
+# Despliegue automático del ambiente QA.
+# Cada push a main: prueba la app en local (SQLite) → si pasa, despliega a AWS → verifica QA.
+# AWS se autentica por OIDC con el rol de infra/github-deploy-role.yaml (sin claves guardadas en GitHub).
+name: Deploy QA
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-qa
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Pruebas
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - name: Revisar sintaxis
+        run: for f in server.js cards.js storage/*.js scripts/*.mjs public/*.js; do node --check "$f"; done
+      - name: Prueba de punta a punta (SQLite local)
+        run: |
+          node server.js > server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:3000/healthz >/dev/null && break; sleep 1; done
+          node scripts/smoke-test.mjs http://localhost:3000
+      - name: Logs del servidor si falla
+        if: failure()
+        run: cat server.log
+
+  deploy:
+    name: Desplegar a QA
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: qa
+      url: ${{ vars.QA_URL }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - name: Instalar la última AWS CLI v2 (incluye "aws lambda-web")
+        run: |
+          curl -sSfL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          aws --version
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_QA_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Desplegar
+        run: node scripts/deploy-qa.mjs
+      - name: Verificar QA
+        run: node scripts/smoke-test.mjs "${{ vars.QA_URL }}" --readonly

@@ -38,7 +38,12 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
 
 Topes de seguridad del endpoint: máximo 2 entornos en paralelo y 100 peticiones/segundo.
 
-**Desplegar / actualizar QA** (requiere AWS CLI v2 reciente con credenciales):
+**Despliegue automático:** cada push a `main` ejecuta [.github/workflows/deploy-qa.yml](.github/workflows/deploy-qa.yml):
+prueba la app en local (SQLite), y si pasa despliega a QA y verifica que responde. GitHub entra a AWS por OIDC
+con el rol de `infra/github-deploy-role.yaml` (sin claves guardadas); solo el environment `qa`, limitado a `main`,
+puede usarlo. Variables del repo: `AWS_QA_ROLE_ARN` y `QA_URL`. También se puede lanzar a mano desde la pestaña Actions.
+
+**Desplegar / actualizar QA a mano** (requiere AWS CLI v2 reciente con credenciales):
 
 ```
 node scripts/deploy-qa.mjs

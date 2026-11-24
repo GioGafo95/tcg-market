@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  TCG Market - rol que GitHub Actions asume (OIDC, sin claves guardadas) para desplegar el ambiente QA.
+  Solo lo puede usar el environment "qa" del repositorio (restringido a la rama main), y solo sobre los recursos de QA.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: GioGafo95/tcg-market
+  EnvName:
+    Type: String
+    Default: qa
+  OidcProviderArn:
+    Type: String
+    Description: Proveedor OIDC de GitHub ya existente en la cuenta (token.actions.githubusercontent.com)
+
+Resources:
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub tcg-market-${EnvName}-github-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Ref OidcProviderArn }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # Solo jobs del environment "qa" de GitHub, que a su vez solo acepta la rama main
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${EnvName}
+      Policies:
+        - PolicyName: deploy-qa
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Stack
+                Effect: Allow
+                Action: cloudformation:*
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/tcg-market-${EnvName}/*
+              - Sid: StackLectura
+                Effect: Allow
+                Action: [cloudformation:ValidateTemplate, cloudformation:GetTemplateSummary]
+                Resource: '*'
+              - Sid: Tabla
+                Effect: Allow
+                Action: dynamodb:*
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/tcg-market-${EnvName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/tcg-market-${EnvName}/index/*
+              - Sid: Buckets
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::tcg-market-${EnvName}-files-${AWS::AccountId}
+                  - !Sub arn:aws:s3:::awscli-lambdaweb-${AWS::AccountId}-${AWS::Region}-an
+                  - !Sub arn:aws:s3:::awscli-lambdaweb-${AWS::AccountId}-${AWS::Region}-an/*
+              - Sid: Logs
+                Effect: Allow
+                Action: logs:*
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/web/tcg-market-${EnvName}*
+              - Sid: LogsLectura
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
+              - Sid: RolDeLaFuncion
+                Effect: Allow
+                Action: [iam:GetRole, iam:PassRole, iam:GetRolePolicy, iam:PutRolePolicy, iam:DeleteRolePolicy, iam:ListRolePolicies, iam:ListAttachedRolePolicies]
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/awscli-lambdaweb-tcg-market-${EnvName}
+              - Sid: WebFunction
+                Effect: Allow
+                Action: ['lambda:*WebFunction*', lambda:TagResource, lambda:UntagResource, lambda:ListTags]
+                Resource:
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:web-function/tcg-market-${EnvName}
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:web-function/tcg-market-${EnvName}/*
+              - Sid: WebFunctionCuenta
+                Effect: Allow
+                Action: [lambda:GetWebAccountSettings, lambda:ListWebFunctions]
+                Resource: '*'
+      Tags:
+        - { Key: app, Value: tcg-market }
+        - { Key: env, Value: !Ref EnvName }
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt DeployRole.Arn

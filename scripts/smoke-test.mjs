@@ -1,7 +1,9 @@
 // Prueba rápida de punta a punta contra un ambiente (local o QA).
-// Uso:  node scripts/smoke-test.mjs http://localhost:3000
-// Crea un usuario de prueba temporal, publica una carta con foto, la edita y al final la borra.
-const BASE = (process.argv[2] || 'http://localhost:3000').replace(/\/$/, '');
+// Uso:  node scripts/smoke-test.mjs http://localhost:3000 [--readonly]
+// Completo: crea un usuario de prueba temporal, publica una carta con foto, la edita y al final la borra.
+// --readonly: solo comprueba que el ambiente responde (no crea datos); lo usa el despliegue automático.
+const BASE = (process.argv.slice(2).find(a => !a.startsWith('--')) || 'http://localhost:3000').replace(/\/$/, '');
+const READONLY = process.argv.includes('--readonly');
 let cookie = '';
 
 async function call(path, { method = 'GET', body, expect } = {}) {
@@ -27,6 +29,14 @@ const run = async () => {
   console.log(`Probando ${BASE}`);
   const h = await call('/healthz', { expect: 200 }); ok(`salud: ${JSON.stringify(h.data)}`);
   await call('/', { expect: 200 }); ok('página principal');
+  if (READONLY) {
+    const s = await call('/api/stats', { expect: 200 }); ok(`estadísticas: ${JSON.stringify(s.data)}`);
+    const c = await call('/api/listings', { expect: 200 }); ok(`catálogo: ${c.data.listings.length} cartas`);
+    await call('/api/auth/me', { expect: 200 }); ok('sesión (anónima)');
+    await call('/api/listings/mine', { expect: 401 }); ok('rutas privadas protegidas');
+    console.log('\nTodo OK (solo lectura).');
+    return;
+  }
 
   const u = `smoke_${Date.now().toString(36)}`;
   await call('/api/auth/register', { method: 'POST', expect: 201,
