@@ -23,6 +23,9 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
 - Búsqueda de la carta exacta (edición y rareza) que rellena datos, imagen oficial y
   **precio estimado de mercado** (TCGplayer, USD) desde pokemontcg.io (respaldo: tcgdex.net) y ygoprodeck.com.
   Collectr no tiene API pública, por eso se usa TCGplayer como referencia.
+- Precios en **pesos mexicanos (MXN)**: el vendedor captura su precio en MXN y el precio de mercado (USD) se
+  convierte con el tipo de cambio del día (Banco Central Europeo vía Frankfurter; respaldo open.er-api.com),
+  guardado en caché 6 horas. Consulta el tipo de cambio en `GET /api/fx`.
   El precio se consulta en el servidor al guardar, así el vendedor no puede falsearlo.
 - Portada ilustrada (castillo, dragón, atardecer) y efecto holográfico 3D en las cartas.
 - Perfil público de cada vendedor con su contacto y sus cartas.

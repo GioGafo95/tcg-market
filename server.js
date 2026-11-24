@@ -2,6 +2,9 @@ import express from 'express';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { repo, STORAGE, putFile, deleteFile, publicUrl, uploadsHandler } from './storage/index.js';
 import { searchCards, getCardByRef, cacheRefImage } from './cards.js';
+import { getUsdMxn, toMxn } from './fx.js';
+
+const fxInfo = fx => (fx ? { rate: Math.round(fx.rate * 10000) / 10000, date: fx.date, source: fx.source } : null);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -110,6 +113,13 @@ app.use(async (req, _res, next) => {
   } catch (err) { next(err); }
 });
 
+// Tipo de cambio USD→MXN para las respuestas de la API (en caché 6 h; nunca bloquea si falla)
+app.use('/api', async (req, _res, next) => {
+  req.fx = await getUsdMxn().catch(() => null);
+  next();
+});
+app.get('/api/fx', (req, res) => res.json({ base: 'USD', quote: 'MXN', fx: fxInfo(req.fx) }));
+
 function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Debes iniciar sesión.' });
   next();
@@ -168,7 +178,11 @@ app.get('/api/lookup', requireAuth, async (req, res) => {
   const game = GAMES.includes(req.query.game) ? req.query.game : null;
   if (!game) throw new HttpError(400, 'Juego no válido.');
   try {
-    res.json({ results: await searchCards(game, str(req.query.q, 100)) });
+    const results = await searchCards(game, str(req.query.q, 100));
+    res.json({
+      results: results.map(r => ({ ...r, market_price_mxn: toMxn(r.market_price, req.fx) })),
+      fx: fxInfo(req.fx),
+    });
   } catch (err) {
     console.error('lookup:', err.message);
     throw new HttpError(502, 'No se pudo consultar la base de datos de cartas. Intenta de nuevo o rellena los datos a mano.');
@@ -177,11 +191,17 @@ app.get('/api/lookup', requireAuth, async (req, res) => {
 
 // ---------- Cartas en venta ----------
 
-// Forma pública de una carta: fotos como URLs y portada
-function listingOut(l) {
+// Forma pública de una carta: fotos como URLs, portada y precio de mercado convertido a pesos.
+// El precio del vendedor (price) se captura directamente en MXN; el de mercado se guarda en USD (TCGplayer).
+function listingOut(l, fx) {
   if (!l) return l;
   const photos = (l.photos || []).map(p => ({ id: String(p.id), url: publicUrl(photoKey(p.filename)) }));
-  return { ...l, photos, photo_count: photos.length, cover_photo: photos[0]?.url || null };
+  return {
+    ...l, currency: 'MXN', photos, photo_count: photos.length, cover_photo: photos[0]?.url || null,
+    market_price_usd: l.market_price ?? null,
+    market_price_mxn: toMxn(l.market_price, fx),
+    fx: l.market_price ? fxInfo(fx) : null,
+  };
 }
 
 function validateListing(body) {
@@ -244,18 +264,18 @@ app.get('/api/listings', async (req, res) => {
     condition: CONDITIONS.includes(req.query.condition) ? req.query.condition : '',
     q: str(req.query.q, 100), seller: str(req.query.seller, 30), sort: str(req.query.sort, 20),
   });
-  res.json({ listings: listings.map(listingOut) });
+  res.json({ listings: listings.map(l => listingOut(l, req.fx)) });
 });
 
 app.get('/api/listings/mine', requireAuth, async (req, res) => {
   const listings = await repo.listListings({ userId: req.user.id });
-  res.json({ listings: listings.map(listingOut) });
+  res.json({ listings: listings.map(l => listingOut(l, req.fx)) });
 });
 
 app.get('/api/listings/:id', async (req, res) => {
   const l = await repo.getListing(str(req.params.id, 40));
   if (!l) throw new HttpError(404, 'Carta no encontrada.');
-  res.json({ listing: listingOut(l) });
+  res.json({ listing: listingOut(l, req.fx) });
 });
 
 app.post('/api/listings', requireAuth, async (req, res) => {
@@ -267,7 +287,7 @@ app.post('/api/listings', requireAuth, async (req, res) => {
   const ref = await resolveReference(data);
   const photos = await storePhotos(newPhotos);
   const listing = await repo.createListing(req.user.id, { ...data, ...ref }, photos);
-  res.status(201).json({ listing: listingOut(listing) });
+  res.status(201).json({ listing: listingOut(listing, req.fx) });
 });
 
 async function ownListing(req) {
@@ -296,7 +316,7 @@ app.put('/api/listings/:id', requireAuth, async (req, res) => {
 
   const listing = await repo.updateListing(existing.id, { ...data, ...ref, status }, [...kept, ...added]);
   await Promise.all(removed.map(p => deleteFile(photoKey(p.filename))));
-  res.json({ listing: listingOut(listing) });
+  res.json({ listing: listingOut(listing, req.fx) });
 });
 
 app.patch('/api/listings/:id/status', requireAuth, async (req, res) => {
@@ -319,7 +339,7 @@ app.get('/api/users/:username', async (req, res) => {
   const user = await repo.findUserByUsername(str(req.params.username, 30));
   if (!user) throw new HttpError(404, 'Usuario no encontrado.');
   const listings = await repo.listListings({ userId: user.id, onlyAvailable: true });
-  res.json({ user: publicUser(user), listings: listings.map(listingOut) });
+  res.json({ user: publicUser(user), listings: listings.map(l => listingOut(l, req.fx)) });
 });
 
 app.get('/api/stats', async (_req, res) => res.json(await repo.stats()));

@@ -35,7 +35,15 @@ const LANGUAGES = ['Español', 'Inglés', 'Japonés', 'Portugués', 'Francés', 
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const money = (n) => new Intl.NumberFormat('es', { style: 'currency', currency: 'USD' }).format(n);
+// Precios en pesos mexicanos: "$1,250 MXN" (sin centavos si el monto es entero)
+const money = (n) => {
+  const v = Number(n) || 0;
+  const d = Number.isInteger(v) ? 0 : 2;
+  return `${new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: d, maximumFractionDigits: d }).format(v)} MXN`;
+};
+const usd = (n) => `US${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)}`;
+// Texto del tipo de cambio usado para convertir el precio de mercado
+const fxNote = (fx) => (fx ? `tipo de cambio ${fx.rate.toFixed(2)} MXN por dólar (${esc(fx.source)}, ${esc(fx.date || '')})` : '');
 const safeImg = (url) => (/^(https?:\/\/|\/uploads\/)/i.test(url || '') ? url : '');
 const MAX_PHOTOS = 6;
 
@@ -115,7 +123,7 @@ function cardTile(l, { showSeller = true } = {}) {
         <div class="card-name">${esc(l.card_name)}</div>
         <div class="card-meta">${esc([l.set_name, l.card_code, l.rarity].filter(Boolean).join(' · '))}</div>
         ${showSeller ? `<div class="card-meta">Vende @${esc(l.username)}${l.location ? ' · ' + esc(l.location) : ''}</div>` : ''}
-        ${l.market_price ? `<div class="card-meta">Mercado: ${money(l.market_price)}</div>` : ''}
+        ${l.market_price_mxn ? `<div class="card-meta">Mercado: ${money(l.market_price_mxn)}</div>` : ''}
         <div class="card-foot"><span class="price">${money(l.price)}</span>
           <span class="card-meta">x${l.quantity}</span></div>
       </div>
@@ -232,10 +240,11 @@ async function viewListing(id) {
         ${l.status === 'sold' ? '<span class="badge sold">Vendida</span>' : ''}
         <h1>${esc(l.card_name)}</h1>
         <div class="price" style="font-size:1.8rem">${money(l.price)}</div>
-        ${l.market_price ? `
+        ${l.market_price_mxn ? `
           <div class="market-box">
-            <div><span class="muted">Precio estimado de mercado</span> <b>${money(l.market_price)}</b> ${marketCompare(l.price, l.market_price)}</div>
-            <div class="card-meta">Fuente: ${esc(l.market_source)} · actualizado ${new Date(l.market_updated).toLocaleDateString('es')}. Es una referencia, no un precio garantizado.</div>
+            <div><span class="muted">Precio estimado de mercado</span> <b>${money(l.market_price_mxn)}</b> ${marketCompare(l.price, l.market_price_mxn)}</div>
+            <div class="card-meta">${esc(l.market_source)}: ${usd(l.market_price_usd)} (consultado el ${new Date(l.market_updated).toLocaleDateString('es-MX')}),
+              convertido con ${fxNote(l.fx)}. Es una referencia, no un precio garantizado.</div>
           </div>` : ''}
         <dl class="specs">
           <dt>Expansión</dt><dd>${esc(l.set_name) || '—'}</dd>
@@ -399,7 +408,9 @@ async function viewListingForm(id) {
   if (id && l.user_id !== currentUser.id) { $app.innerHTML = '<div class="empty">Esta publicación no es tuya.</div>'; return; }
 
   // Estado del formulario: carta de referencia elegida y fotos
-  let ref = l.ref_id ? { ref_id: l.ref_id, image: l.image_url, market_price: l.market_price, market_source: l.market_source } : null;
+  // ref.market_price está en MXN (convertido en el servidor); ref.usd es el valor original de TCGplayer
+  let ref = l.ref_id ? { ref_id: l.ref_id, image: l.image_url, market_price: l.market_price_mxn, usd: l.market_price_usd,
+                         market_source: l.market_source, fx: l.fx } : null;
   let keepPhotos = (l.photos || []).map(p => ({ ...p }));
   let newPhotos = []; // data URLs comprimidas
 
@@ -444,7 +455,7 @@ async function viewListingForm(id) {
           <div class="field"><label>Idioma</label><select name="language">
             ${LANGUAGES.map(x => `<option ${l.language === x ? 'selected' : ''}>${x}</option>`).join('')}
           </select></div>
-          <div class="field"><label>Precio (USD)</label><input name="price" type="number" min="0" step="0.01" required value="${esc(l.price)}">
+          <div class="field"><label>Precio (MXN)</label><input name="price" type="number" min="0" step="0.01" required value="${esc(l.price)}">
             <div class="card-meta" id="priceHint"></div></div>
           <div class="field"><label>Cantidad</label><input name="quantity" type="number" min="0" max="999" step="1" required value="${esc(l.quantity)}"></div>
         </div>
@@ -472,13 +483,16 @@ async function viewListingForm(id) {
           <div><b>${esc(f.card_name.value)}</b></div>
           <div class="card-meta">${esc([f.set_name.value, f.card_code.value, f.rarity.value].filter(Boolean).join(' · '))}</div>
           ${ref.market_price
-            ? `<div class="est">Precio estimado de mercado: <b>${money(ref.market_price)}</b> <span class="card-meta">(${esc(ref.market_source || 'TCGplayer')})</span></div>
+            ? `<div class="est">Precio estimado de mercado: <b>${money(ref.market_price)}</b></div>
+               <div class="card-meta">${esc(ref.market_source || 'TCGplayer')}: ${usd(ref.usd)} · ${fxNote(ref.fx)}</div>
                <button type="button" class="btn small" id="usePrice">Usar este precio</button>`
-            : '<div class="card-meta">No hay precio de mercado disponible para esta edición.</div>'}
+            : ref.usd
+              ? `<div class="card-meta">Precio en ${esc(ref.market_source || 'TCGplayer')}: ${usd(ref.usd)} (no se pudo obtener el tipo de cambio ahora).</div>`
+              : '<div class="card-meta">No hay precio de mercado disponible para esta edición.</div>'}
           <button type="button" class="btn small" id="clearRef">Quitar selección</button>
         </div>
       </div>`;
-    document.getElementById('usePrice')?.addEventListener('click', () => { f.price.value = ref.market_price.toFixed(2); renderPriceHint(); });
+    document.getElementById('usePrice')?.addEventListener('click', () => { f.price.value = Math.round(ref.market_price); renderPriceHint(); });
     document.getElementById('clearRef').addEventListener('click', () => { ref = null; renderRef(); });
     renderPriceHint();
   }
@@ -497,7 +511,7 @@ async function viewListingForm(id) {
     box.innerHTML = '<span class="muted">Buscando…</span>';
     const game = f.game.value;
     try {
-      const { results } = await api(`/api/lookup?${new URLSearchParams({ game, q: name })}`);
+      const { results, fx } = await api(`/api/lookup?${new URLSearchParams({ game, q: name })}`);
       if (f.game.value !== game || f.card_name.value.trim() !== name) return; // llegó una búsqueda más nueva
       if (!results.length) { box.innerHTML = '<span class="muted">Sin resultados. Puedes rellenar los datos a mano.</span>'; return; }
       box.innerHTML = results.map((r, i) => `
@@ -506,14 +520,16 @@ async function viewListingForm(id) {
           <b>${esc(r.card_name)}</b><br>
           <span class="muted">${esc(r.set_name)} ${esc(r.card_code)}</span><br>
           <span class="muted">${esc(r.rarity)}</span>
-          ${r.market_price ? `<div class="est-chip">${money(r.market_price)}</div>` : ''}
+          ${r.market_price_mxn ? `<div class="est-chip">${money(r.market_price_mxn)}</div>`
+            : r.market_price ? `<div class="est-chip">${usd(r.market_price)}</div>` : ''}
         </button>`).join('');
       box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
         const r = results[b.dataset.i];
         for (const k of ['card_name', 'set_name', 'card_code', 'rarity']) f[k].value = r[k] || '';
-        ref = { ref_id: r.ref_id, image: r.image_small || r.image_url, market_price: r.market_price, market_source: r.market_source };
+        ref = { ref_id: r.ref_id, image: r.image_small || r.image_url, market_price: r.market_price_mxn, usd: r.market_price,
+                market_source: r.market_source, fx };
         box.innerHTML = ''; renderRef();
-        if (!f.price.value && r.market_price) { f.price.value = r.market_price.toFixed(2); renderPriceHint(); }
+        if (!f.price.value && r.market_price_mxn) { f.price.value = Math.round(r.market_price_mxn); renderPriceHint(); }
       }));
     } catch (err) {
       box.innerHTML = `<span class="muted">${esc(err.message)}</span>`;

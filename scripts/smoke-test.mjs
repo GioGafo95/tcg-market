@@ -71,7 +71,11 @@ const run = async () => {
     rarity: ref?.rarity, ref_id: ref?.ref_id || '', price: 12.5, quantity: 1, new_photos: [JPEG, JPEG],
   } });
   const l = created.data.listing;
-  ok(`carta publicada id=${l.id}, fotos=${l.photos.length}, precio mercado=${l.market_price}, imagen oficial=${l.image_url || '—'}`);
+  ok(`carta publicada id=${l.id}, fotos=${l.photos.length}, imagen oficial=${l.image_url || '—'}`);
+  if (l.market_price_usd) {
+    if (!l.market_price_mxn || !l.fx) throw new Error('falta la conversión del precio de mercado a MXN');
+    ok(`precio de mercado: US$${l.market_price_usd} → $${l.market_price_mxn} MXN (tipo de cambio ${l.fx.rate}, ${l.fx.source})`);
+  }
 
   const photo = await call(l.photos[0].url);
   if (![200, 302].includes(photo.status)) throw new Error(`foto → ${photo.status}`);
