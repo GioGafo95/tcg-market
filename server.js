@@ -4,6 +4,7 @@ import { repo, STORAGE, putFile, deleteFile, publicUrl, uploadsHandler } from '.
 import { searchCards, getCardByRef, cacheRefImage } from './cards.js';
 import { getUsdMxn, toMxn } from './fx.js';
 import { outcome, opponentOf, standings, pairRound, streaks } from './tournaments.js';
+import { parseTdf, TdfError, shortName } from './tdf.js';
 
 const fxInfo = fx => (fx ? { rate: Math.round(fx.rate * 10000) / 10000, date: fx.date, source: fx.source } : null);
 
@@ -181,9 +182,12 @@ app.get('/api/lookup', requireAuth, async (req, res) => {
   const game = GAMES.includes(req.query.game) ? req.query.game : null;
   if (!game) throw new HttpError(400, 'Juego no válido.');
   try {
-    const results = await searchCards(game, str(req.query.q, 100));
+    const page = Math.min(Math.max(parseInt(req.query.page, 10) || 1, 1), 50);
+    const source = ['pokemontcg', 'tcgdex', 'tcgdex-es'].includes(req.query.source) ? req.query.source : '';
+    const { results, has_more, source: used = '' } = await searchCards(game, str(req.query.q, 100), page, source);
     res.json({
       results: results.map(r => ({ ...r, market_price_mxn: toMxn(r.market_price, req.fx) })),
+      page, has_more, source: used,
       fx: fxInfo(req.fx),
     });
   } catch (err) {
@@ -369,16 +373,51 @@ const lite = p => p && { user_id: p.user_id, username: p.username, display_name:
 async function loadTournament(id) {
   const t = await repo.getTournament(str(id, 40));
   if (!t) throw new HttpError(404, 'Torneo no encontrado.');
+  if (t.source === 'tdf') return loadTdfTournament(t);
   const [players, matches] = await Promise.all([repo.getTournamentPlayers(t.id), repo.getMatches(t.id)]);
   return { t, players, matches, table: standings(players, matches) };
 }
 
+// Torneo importado de TOM: los jugadores se identifican por su ID de jugador Pokémon (user_id = ID Pokémon).
+// Si alguien de la app tiene ese ID vinculado, se muestra con su nombre y usuario; si no, nombre + inicial.
+async function loadTdfTournament(t) {
+  const d = t.tdf_data;
+  const linked = await repo.getUsersByPokemonIds(Object.keys(d.players));
+  const players = [], matches = [], table = [];
+  for (const c of d.categories) {
+    const catPlayers = [...new Set([...c.members, ...c.rounds.flatMap(r => r.matches.flatMap(m => [m.player1_id, m.player2_id]))])]
+      .filter(Boolean).map(pid => {
+        const u = linked.get(pid);
+        return { user_id: pid, pokemon_id: pid, category: c.label, username: u?.username || null,
+                 display_name: u?.display_name || shortName(d.players[pid]), location: u?.location || '' };
+      });
+    const catMatches = c.rounds.flatMap(r => r.matches.map(m => ({ ...m, round: r.number, topcut: r.topcut, category: c.label })));
+    // Puntos y % de rivales solo con el suizo; el récord incluye el top cut; el lugar es el oficial de TOM
+    const swiss = standings(catPlayers, catMatches.filter(m => !m.topcut));
+    const total = standings(catPlayers, catMatches);
+    const official = new Map(c.standings.map(s => [s.id, s.place]));
+    const rows = swiss.map(r => {
+      const tot = total.find(x => x.user_id === r.user_id);
+      return { ...r, wins: tot.wins, losses: tot.losses, ties: tot.ties, category: c.label,
+               place: official.get(r.user_id) ?? r.place };
+    }).sort((a, b) => a.place - b.place);
+    players.push(...catPlayers); matches.push(...catMatches); table.push(...rows);
+  }
+  return { t, tdf: true, players, matches, table };
+}
+
 const isOrganizer = (t, user) => user && sameId(t.organizer_id, user.id);
+// Clave del usuario dentro de un torneo: su id en la app, o su ID de jugador si el torneo viene de TOM
+const playerKey = (L, user) => (L.tdf ? user.pokemon_id || null : user.id);
 
 // Partida de la ronda en curso para un jugador, con su rival y el récord de ambos
-function currentMatch({ t, players, matches, table }, userId) {
-  if (t.status !== 'running') return null;
-  const m = matches.find(x => x.round === t.current_round && opponentOf(x, userId) !== undefined);
+function currentMatch({ t, tdf, players, matches, table }, userId) {
+  if (t.status !== 'running' || userId == null) return null;
+  const mine = matches.filter(x => opponentOf(x, userId) !== undefined);
+  // En un TDF cada categoría lleva su propio número de ronda: se usa la última ronda de la categoría del jugador
+  const category = mine[0]?.category;
+  const roundNow = tdf ? Math.max(0, ...matches.filter(x => x.category === category).map(x => x.round)) : t.current_round;
+  const m = mine.find(x => x.round === roundNow);
   if (!m) return null;
   const oppId = opponentOf(m, userId);
   const rec = id => { const r = table.find(x => sameId(x.user_id, id)); return r && { wins: r.wins, losses: r.losses, ties: r.ties, place: r.place }; };
@@ -398,21 +437,25 @@ app.get('/api/tournaments', async (_req, res) => {
 
 // Panel personal: ID vinculado, partidas en curso, historial y rachas en todos los torneos
 app.get('/api/tournaments/me', requireAuth, async (req, res) => {
-  const ids = await repo.listUserTournamentIds(req.user.id);
-  const loaded = (await Promise.all(ids.map(id => loadTournament(String(id)).catch(() => null)))).filter(Boolean);
+  // Torneos de la app en los que se inscribió + torneos de TOM donde aparece su ID de jugador
+  const ids = [...new Set([...await repo.listUserTournamentIds(req.user.id),
+                           ...await repo.listTournamentIdsByPokemonId(req.user.pokemon_id)].map(String))];
+  const loaded = (await Promise.all(ids.map(id => loadTournament(id).catch(() => null)))).filter(Boolean);
   loaded.sort((a, b) => a.t.starts_at.localeCompare(b.t.starts_at));
 
   const all = [];
   const history = loaded.map(L => {
-    const results = resultsIn(L.matches, req.user.id);
+    const key = playerKey(L, req.user);
+    const results = resultsIn(L.matches, key);
     all.push(...results);
-    const row = L.table.find(r => sameId(r.user_id, req.user.id));
+    const row = L.table.find(r => sameId(r.user_id, key));
     return { id: L.t.id, name: L.t.name, location: L.t.location, starts_at: L.t.starts_at, status: L.t.status,
+             source: L.t.source || 'app', category: row?.category || null,
              player_count: L.players.length, place: row?.place ?? null, ...streaks(results) };
   }).reverse();
 
   const active = loaded.map(L => {
-    const cm = currentMatch(L, req.user.id);
+    const cm = hideOpponentId(L, currentMatch(L, playerKey(L, req.user)));
     return cm && { tournament: { id: L.t.id, name: L.t.name, location: L.t.location }, ...cm };
   }).filter(Boolean);
 
@@ -424,36 +467,88 @@ app.post('/api/tournaments', requireAuth, async (req, res) => {
   res.status(201).json({ tournament: t });
 });
 
+// Organizador según el TDF, mostrado como nombre + inicial ("Carlos A.")
+const organizerName = o => {
+  const words = String(o?.name || '').trim().split(/\s+/).filter(Boolean);
+  return words.length ? shortName({ first: words[0], last: words.slice(1).join(' ') }) : '';
+};
+
+// Nombre de la ronda: "Ronda 3" en suizo; en el top cut, según cuántas partidas quedan
+const roundLabel = (round, topcut, count) => (!topcut ? `Ronda ${round}`
+  : count === 1 ? 'Top cut · Final' : count === 2 ? 'Top cut · Semifinales' : count === 4 ? 'Top cut · Cuartos de final' : `Top cut · Ronda ${round}`);
+
 app.get('/api/tournaments/:id', async (req, res) => {
   const L = await loadTournament(req.params.id);
   const { t, players, matches, table } = L;
   const manage = isOrganizer(t, req.user);
-  const byId = new Map(players.map(p => [String(p.user_id), lite(p)]));
-  const rounds = [];
+  // En un TDF la clave interna es el ID de jugador: hacia afuera se usa un alias (j1, j2…) para no exponerlo
+  const alias = L.tdf ? new Map(players.map((p, i) => [String(p.user_id), `j${i + 1}`])) : null;
+  const pub = id => (alias ? alias.get(String(id)) ?? null : id);
+  const byId = new Map(players.map(p => [String(p.user_id), { ...lite(p), user_id: pub(p.user_id) }]));
+  const rounds = new Map();
   for (const m of matches) {
-    (rounds[m.round - 1] ??= { round: m.round, matches: [] }).matches.push({
+    const k = `${m.category || ''}|${m.round}`;
+    if (!rounds.has(k)) rounds.set(k, { round: m.round, category: m.category || null, topcut: !!m.topcut, matches: [] });
+    rounds.get(k).matches.push({
       table_no: m.table_no, result: m.result, bye: m.player2_id == null,
       player1: byId.get(String(m.player1_id)) || null, player2: m.player2_id == null ? null : byId.get(String(m.player2_id)) || null,
     });
   }
-  const joined = !!req.user && players.some(p => sameId(p.user_id, req.user.id));
+  const key = req.user ? playerKey(L, req.user) : null;
+  const joined = key != null && players.some(p => sameId(p.user_id, key));
+  const { tdf_data, ...tournament } = t;
   res.json({
-    tournament: { ...t, player_count: players.length },
+    tournament: { ...tournament, player_count: players.length,
+                  ...(L.tdf ? { organizer_tom: organizerName(tdf_data.organizer), categories: tdf_data.categories.map(c => c.label) } : {}) },
     can_manage: manage,
     // El ID de jugador solo lo ve quien organiza (para capturarlo en el reporte oficial)
-    players: players.map(p => ({ ...lite(p), location: p.location, ...(manage ? { pokemon_id: p.pokemon_id } : {}) })),
-    standings: table.map(({ opponents, ...r }) => r),
-    rounds: rounds.filter(Boolean),
+    players: players.map(p => ({ ...lite(p), user_id: pub(p.user_id), location: p.location, category: p.category,
+                                 ...(manage ? { pokemon_id: p.pokemon_id } : {}) })),
+    standings: table.map(({ opponents, ...r }) => ({ ...r, user_id: pub(r.user_id) })),
+    rounds: [...rounds.values()].map(r => ({ ...r, label: roundLabel(r.round, r.topcut, r.matches.length) })),
     round_complete: matches.filter(m => m.round === t.current_round).every(m => m.result),
-    me: joined ? { joined, match: currentMatch(L, req.user.id), ...streaks(resultsIn(matches, req.user.id)) } : { joined: false },
+    me: joined ? { joined, key: pub(key), match: hideOpponentId(L, currentMatch(L, key)), ...streaks(resultsIn(matches, key)) }
+               : { joined: false },
   });
 });
+
+// En torneos de TOM no se manda el ID de jugador del rival
+const hideOpponentId = (L, cm) => (cm && L.tdf && cm.opponent ? { ...cm, opponent: { ...cm.opponent, user_id: undefined } } : cm);
 
 async function managedTournament(req) {
   const L = await loadTournament(req.params.id);
   if (!isOrganizer(L.t, req.user)) throw new HttpError(403, 'Solo quien organiza el torneo puede hacer esto.');
+  if (L.tdf) throw new HttpError(400, 'Este torneo viene de TOM: se actualiza subiendo un TDF nuevo.');
   return L;
 }
+
+// Importar (o actualizar) un torneo desde el TDF que genera TOM. Lo puede subir quien aparece en el
+// archivo como organizador o como jugador; para actualizarlo, quien lo subió o el organizador.
+app.post('/api/tournaments/import-tdf', requireAuth, async (req, res) => {
+  if (!req.user.pokemon_id) throw new HttpError(400, 'Vincula tu ID de jugador Pokémon antes de importar un torneo.');
+  let parsed;
+  try {
+    parsed = parseTdf(req.body.tdf);
+  } catch (err) {
+    if (err instanceof TdfError) throw new HttpError(400, err.message);
+    throw new HttpError(400, 'No se pudo leer el archivo TDF.');
+  }
+  const mine = req.user.pokemon_id;
+  const isTomOrganizer = parsed.data.organizer.popid === mine;
+  if (!isTomOrganizer && !parsed.data.players[mine])
+    throw new HttpError(403, 'Tu ID de jugador no aparece en este TDF (ni como organizador ni como jugador).');
+
+  const existing = await repo.findTournamentByTdfId(parsed.tdf_id);
+  if (existing && !sameId(existing.organizer_id, req.user.id) && existing.tdf_data?.organizer?.popid !== mine)
+    throw new HttpError(403, `Este torneo ya lo importó @${existing.organizer_username}; solo esa persona o el organizador pueden actualizarlo.`);
+  try {
+    const t = await repo.saveTdfTournament(req.user.id, parsed, existing?.id);
+    res.status(existing ? 200 : 201).json({ tournament: { id: t.id, name: t.name }, updated: !!existing });
+  } catch (err) {
+    if (err.name === 'TransactionCanceledException') throw new HttpError(409, 'Alguien más está importando este torneo; intenta de nuevo.');
+    throw err;
+  }
+});
 
 app.post('/api/tournaments/:id/join', requireAuth, async (req, res) => {
   const t = await repo.getTournament(str(req.params.id, 40));
@@ -507,8 +602,11 @@ app.post('/api/tournaments/:id/finish', requireAuth, async (req, res) => {
 });
 
 app.delete('/api/tournaments/:id', requireAuth, async (req, res) => {
-  const { t } = await managedTournament(req);
-  if (t.status !== 'registration') throw new HttpError(400, 'Solo se puede borrar un torneo que no ha empezado.');
+  const t = await repo.getTournament(str(req.params.id, 40));
+  if (!t) throw new HttpError(404, 'Torneo no encontrado.');
+  if (!isOrganizer(t, req.user)) throw new HttpError(403, 'Solo quien organiza el torneo puede hacer esto.');
+  // Un torneo importado de TOM se puede quitar siempre (se puede volver a importar); uno de la app, antes de empezar
+  if (t.source !== 'tdf' && t.status !== 'registration') throw new HttpError(400, 'Solo se puede borrar un torneo que no ha empezado.');
   await repo.deleteTournament(t.id);
   res.json({ ok: true });
 });

@@ -86,7 +86,24 @@ db.exec(`
     result        TEXT CHECK (result IN ('p1', 'p2', 'tie')),
     PRIMARY KEY (tournament_id, round, table_no)
   );
+
+  -- Torneos importados de un TDF de TOM: qué IDs de jugador Pokémon participaron (para su historial)
+  CREATE TABLE IF NOT EXISTS tdf_entries (
+    tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+    pokemon_id    TEXT NOT NULL,
+    PRIMARY KEY (tournament_id, pokemon_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_tdf_entries_pid ON tdf_entries(pokemon_id);
 `);
+
+// Torneos: origen ('app' o 'tdf'), ID del torneo en TOM y datos importados (JSON)
+const tCols = db.prepare('PRAGMA table_info(tournaments)').all().map(c => c.name);
+for (const [name, def] of Object.entries({
+  source: "TEXT NOT NULL DEFAULT 'app'", tdf_id: 'TEXT', tdf_data: 'TEXT', tdf_players: 'INTEGER NOT NULL DEFAULT 0',
+})) {
+  if (!tCols.includes(name)) db.exec(`ALTER TABLE tournaments ADD COLUMN ${name} ${def}`);
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_tournaments_tdf ON tournaments(tdf_id) WHERE tdf_id IS NOT NULL');
 
 // Migraciones de columnas añadidas después de la primera versión
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
@@ -116,7 +133,19 @@ function listingOut(row) {
   return { ...row, created_at: iso(row.created_at), updated_at: iso(row.updated_at), photos };
 }
 
-const LISTING_FIELDS = ['game', 'card_name', 'set_name', 'card_code', 'rarity', 'condition', 'language', 'price',
+const TOURNAMENT_SELECT = `
+  SELECT t.*, u.username AS organizer_username, u.display_name AS organizer_name,
+    CASE WHEN t.source = 'tdf' THEN t.tdf_players
+         ELSE (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) END AS player_count
+  FROM tournaments t JOIN users u ON u.id = t.organizer_id`;
+
+// withData: el detalle incluye los datos importados del TDF; los listados no (son más pesados)
+function tournamentOut(t, withData) {
+  const { tdf_data, tdf_players, ...rest } = t;
+  return { ...rest, created_at: iso(t.created_at), ...(withData && tdf_data ? { tdf_data: JSON.parse(tdf_data) } : {}) };
+}
+
+const LISTING_FIELDS =['game', 'card_name', 'set_name', 'card_code', 'rarity', 'condition', 'language', 'price',
   'quantity', 'notes', 'ref_id', 'image_url', 'market_price', 'market_source', 'market_updated'];
 
 function savePhotos(listingId, photos) {
@@ -222,17 +251,49 @@ export const repo = {
   },
 
   async getTournament(id) {
-    const t = db.prepare(`SELECT t.*, u.username AS organizer_username, u.display_name AS organizer_name,
-      (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) AS player_count
-      FROM tournaments t JOIN users u ON u.id = t.organizer_id WHERE t.id = ?`).get(Number(id));
-    return t ? { ...t, created_at: iso(t.created_at) } : null;
+    const t = db.prepare(`${TOURNAMENT_SELECT} WHERE t.id = ?`).get(Number(id));
+    return t ? tournamentOut(t, true) : null;
   },
 
   async listTournaments() {
-    return db.prepare(`SELECT t.*, u.username AS organizer_username, u.display_name AS organizer_name,
-      (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) AS player_count
-      FROM tournaments t JOIN users u ON u.id = t.organizer_id ORDER BY t.starts_at DESC LIMIT 200`).all()
-      .map(t => ({ ...t, created_at: iso(t.created_at) }));
+    return db.prepare(`${TOURNAMENT_SELECT} ORDER BY t.starts_at DESC LIMIT 200`).all().map(t => tournamentOut(t, false));
+  },
+
+  async findTournamentByTdfId(tdfId) {
+    const row = db.prepare('SELECT id FROM tournaments WHERE tdf_id = ?').get(tdfId);
+    return row ? this.getTournament(row.id) : null;
+  },
+
+  // Crea o reemplaza un torneo importado de TOM y la lista de IDs de jugador que participaron
+  async saveTdfTournament(uploaderId, t, existingId) {
+    const json = JSON.stringify(t.data);
+    const count = Object.keys(t.data.players).length;
+    let id = existingId && Number(existingId);
+    if (id) {
+      db.prepare(`UPDATE tournaments SET name = ?, location = ?, starts_at = ?, status = ?, current_round = ?,
+        tdf_data = ?, tdf_players = ? WHERE id = ?`).run(t.name, t.location, t.starts_at, t.status, t.current_round, json, count, id);
+    } else {
+      id = Number(db.prepare(`INSERT INTO tournaments (organizer_id, name, location, starts_at, rounds, status, current_round,
+        source, tdf_id, tdf_data, tdf_players) VALUES (?, ?, ?, ?, 0, ?, ?, 'tdf', ?, ?, ?)`)
+        .run(uploaderId, t.name, t.location, t.starts_at, t.status, t.current_round, t.tdf_id, json, count).lastInsertRowid);
+    }
+    db.prepare('DELETE FROM tdf_entries WHERE tournament_id = ?').run(id);
+    const ins = db.prepare('INSERT INTO tdf_entries (tournament_id, pokemon_id) VALUES (?, ?)');
+    for (const pid of Object.keys(t.data.players)) ins.run(id, pid);
+    return this.getTournament(id);
+  },
+
+  async listTournamentIdsByPokemonId(pokemonId) {
+    if (!pokemonId) return [];
+    return db.prepare('SELECT tournament_id FROM tdf_entries WHERE pokemon_id = ?').all(pokemonId).map(r => r.tournament_id);
+  },
+
+  // Usuarios registrados con esos IDs de jugador → Map(pokemon_id → usuario)
+  async getUsersByPokemonIds(pokemonIds) {
+    const ids = [...new Set(pokemonIds)].filter(Boolean);
+    if (!ids.length) return new Map();
+    const rows = db.prepare(`SELECT * FROM users WHERE pokemon_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+    return new Map(rows.map(u => [u.pokemon_id, userOut(u)]));
   },
 
   async updateTournament(id, { status, current_round }) {

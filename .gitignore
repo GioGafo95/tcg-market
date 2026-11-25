@@ -17,3 +17,6 @@ uploads/
 *.log
 .DS_Store
 Thumbs.db
+
+# Archivos de torneos de TOM (traen datos personales de jugadores)
+*.tdf

@@ -32,6 +32,12 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
   genera las rondas (emparejamiento suizo por puntos, sin revanchas, bye rotativo) y captura resultados. Cada jugador
   ve en un aviso fijo contra quién juega y en qué mesa, su récord, su racha actual y su historial. El ID de jugador
   solo lo ve quien organiza.
+- **Importar torneos oficiales desde TOM** (`#/torneos/importar`): se sube el archivo `.tdf` que genera TOM (el mismo
+  que va a Play! Tools). Quedan sus rondas, top cut, resultados y la clasificación oficial, y el torneo aparece en el
+  historial de cada jugador con su ID vinculado. Subido a mitad del evento, cada jugador ve su rival y mesa de la ronda.
+  No se guardan fechas de nacimiento; los jugadores sin cuenta se muestran con nombre e inicial del apellido.
+- **Buscador de cartas**: páginas con "Ver más", búsqueda por número ("Pikachu 25"), expansión, código de
+  Yu-Gi-Oh! ("LOB-EN001") y nombre de Pokémon en español; reintenta y usa TCGdex si pokemontcg.io falla.
 - Perfil público de cada vendedor con su contacto y sus cartas.
 
 ## Ambiente QA en AWS (serverless)

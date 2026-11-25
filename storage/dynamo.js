@@ -11,6 +11,8 @@
 //   Torneo               TOURNEY#<id>          META       GSI2: TOURNEY / fecha de inicio
 //   Jugador inscrito     TOURNEY#<id>          PLAYER#<userId>   GSI1: PLAYER#<userId> / fecha
 //   Partida              TOURNEY#<id>          MATCH#<ronda>#<mesa>
+//   Torneo de TOM (TDF)  TDFID#<idTOM>         UNIQUE     → id del torneo (re-importar sin duplicar)
+//   Jugador en un TDF    TOURNEY#<id>          ENTRY#<pokemonId>  GSI1: POKEPLAYER#<pokemonId> / fecha
 //
 // El catálogo lee las cartas por GSI2 y filtra en memoria: suficiente para QA y volúmenes pequeños.
 import { randomBytes } from 'node:crypto';
@@ -255,13 +257,78 @@ export const repo = {
   async getTournament(id) {
     const out = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' } }));
     if (!out.Item) return null;
-    return (await withOrganizers([strip(out.Item)]))[0];
+    const t = strip(out.Item);
+    if (typeof t.tdf_data === 'string') t.tdf_data = JSON.parse(t.tdf_data);
+    return (await withOrganizers([{ source: 'app', ...t }]))[0];
   },
 
   async listTournaments() {
     const items = await queryAll({ TableName: TABLE, IndexName: 'GSI2', KeyConditionExpression: 'GSI2PK = :p',
       ExpressionAttributeValues: { ':p': 'TOURNEY' }, ScanIndexForward: false });
-    return withOrganizers(items.map(strip).slice(0, 200));
+    return withOrganizers(items.map(strip).slice(0, 200).map(({ tdf_data, ...t }) => ({ source: 'app', ...t })));
+  },
+
+  async findTournamentByTdfId(tdfId) {
+    const out = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `TDFID#${tdfId}`, SK: 'UNIQUE' } }));
+    return out.Item ? this.getTournament(out.Item.tournamentId) : null;
+  },
+
+  // Crea o reemplaza un torneo importado de TOM. Cada jugador queda indexado por su ID (GSI1) para su historial.
+  async saveTdfTournament(uploaderId, t, existingId) {
+    const id = existingId || newId();
+    const fields = { name: t.name, location: t.location, starts_at: t.starts_at, status: t.status,
+                     current_round: t.current_round, tdf_data: JSON.stringify(t.data), player_count: Object.keys(t.data.players).length };
+    if (existingId) {
+      const names = Object.fromEntries(Object.keys(fields).map((k, i) => [`#f${i}`, k]));
+      const values = Object.fromEntries(Object.values(fields).map((v, i) => [`:v${i}`, v]));
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' }, ConditionExpression: 'attribute_exists(PK)',
+        UpdateExpression: `SET ${Object.keys(fields).map((_, i) => `#f${i} = :v${i}`).join(', ')}, GSI2SK = :start`,
+        ExpressionAttributeNames: names, ExpressionAttributeValues: { ...values, ':start': t.starts_at },
+      }));
+    } else {
+      await ddb.send(new TransactWriteCommand({ TransactItems: [
+        { Put: { TableName: TABLE, Item: { PK: `TDFID#${t.tdf_id}`, SK: 'UNIQUE', tournamentId: id },
+                 ConditionExpression: 'attribute_not_exists(PK)' } },
+        { Put: { TableName: TABLE, Item: {
+          PK: `TOURNEY#${id}`, SK: 'META', type: 'tournament', GSI2PK: 'TOURNEY', GSI2SK: t.starts_at,
+          id, organizer_id: uploaderId, rounds: 0, source: 'tdf', tdf_id: t.tdf_id, created_at: now(), ...fields,
+        } } },
+      ] }));
+    }
+    const current = await queryAll({ TableName: TABLE, KeyConditionExpression: 'PK = :p AND begins_with(SK, :s)',
+      ExpressionAttributeValues: { ':p': `TOURNEY#${id}`, ':s': 'ENTRY#' }, ProjectionExpression: 'SK' });
+    const keep = new Set(Object.keys(t.data.players));
+    await Promise.all([
+      ...current.filter(e => !keep.has(e.SK.slice(6)))
+        .map(e => ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: e.SK } }))),
+      ...[...keep].map(pid => ddb.send(new PutCommand({ TableName: TABLE, Item: {
+        PK: `TOURNEY#${id}`, SK: `ENTRY#${pid}`, type: 'tdf_entry', GSI1PK: `POKEPLAYER#${pid}`, GSI1SK: t.starts_at,
+        tournament_id: id, pokemon_id: pid } }))),
+    ]);
+    return this.getTournament(id);
+  },
+
+  async listTournamentIdsByPokemonId(pokemonId) {
+    if (!pokemonId) return [];
+    const items = await queryAll({ TableName: TABLE, IndexName: 'GSI1', KeyConditionExpression: 'GSI1PK = :p',
+      ExpressionAttributeValues: { ':p': `POKEPLAYER#${pokemonId}` } });
+    return items.map(i => i.tournament_id);
+  },
+
+  async getUsersByPokemonIds(pokemonIds) {
+    const ids = [...new Set(pokemonIds)].filter(Boolean);
+    const userIds = new Map();
+    for (let i = 0; i < ids.length; i += 100) {
+      let req = { [TABLE]: { Keys: ids.slice(i, i + 100).map(pid => ({ PK: `POKEID#${pid}`, SK: 'UNIQUE' })) } };
+      while (req && Object.keys(req).length) {
+        const out = await ddb.send(new BatchGetCommand({ RequestItems: req }));
+        for (const it of out.Responses?.[TABLE] || []) userIds.set(it.PK.slice(7), it.userId);
+        req = out.UnprocessedKeys;
+      }
+    }
+    const users = await getUsers([...userIds.values()]);
+    return new Map([...userIds].map(([pid, uid]) => [pid, users.get(uid)]).filter(([, u]) => u));
   },
 
   async updateTournament(id, { status, current_round }) {
@@ -274,8 +341,10 @@ export const repo = {
   },
 
   async deleteTournament(id) {
+    const meta = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' } }));
     const items = await queryAll({ TableName: TABLE, KeyConditionExpression: 'PK = :p',
       ExpressionAttributeValues: { ':p': `TOURNEY#${id}` }, ProjectionExpression: 'PK, SK' });
+    if (meta.Item?.tdf_id) items.push({ PK: `TDFID#${meta.Item.tdf_id}`, SK: 'UNIQUE' });
     await Promise.all(items.map(k => ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: k.PK, SK: k.SK } }))));
   },
 

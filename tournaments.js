@@ -13,6 +13,7 @@ export function outcome(m, userId) {
   if (m.player2_id == null) return 'W'; // bye: victoria automática
   if (!m.result) return null;
   if (m.result === 'tie') return 'T';
+  if (m.result === 'dl') return 'L'; // doble derrota (TOM): pierden los dos
   return (m.result === 'p1') === isP1 ? 'W' : 'L';
 }
 

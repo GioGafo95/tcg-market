@@ -128,7 +128,8 @@ const run = async () => {
     body: { username: u2, email: `${u2}@example.test`, password: 'smoketest123', ...profile } });
   await call('/api/auth/me/pokemon-id', { method: 'PUT', expect: 409, body: { pokemon_id: myPid } });
   ok('ID de jugador duplicado rechazado');
-  await call('/api/auth/me/pokemon-id', { method: 'PUT', expect: 200, body: { pokemon_id: pid() } });
+  const rivalPid = pid();
+  await call('/api/auth/me/pokemon-id', { method: 'PUT', expect: 200, body: { pokemon_id: rivalPid } });
   await call(`/api/tournaments/${t.id}/join`, { method: 'POST', expect: 200 });
   await call(`/api/tournaments/${t.id}/rounds`, { method: 'POST', expect: 403 });
   const rival = cookie;
@@ -161,6 +162,43 @@ const run = async () => {
   const list2 = await call('/api/tournaments', { expect: 200 });
   if (list2.data.tournaments.find(x => String(x.id) === String(t.id))?.status !== 'finished') throw new Error('el torneo no quedó terminado');
   ok('torneo finalizado');
+
+  // ---------- Importar un TDF de TOM (datos ficticios): ronda 1 terminada, ronda 2 emparejada ----------
+  const ghost = '7' + String(Date.now()).slice(-6);
+  const pl = (id, f, l) => `<player userid="${id}"><firstname>${f}</firstname><lastname>${l}</lastname><birthdate>01/01/2000</birthdate></player>`;
+  const mt = (o, a, b, n) => `<match outcome="${o}"><player1 userid="${a}"/>${b ? `<player2 userid="${b}"/>` : ''}<tablenumber>${n}</tablenumber></match>`;
+  const tdf = `<?xml version="1.0" encoding="UTF-8"?>
+<tournament type="3" stage="5" version="1.86" gametype="TRADING_CARD_GAME" mode="TCG1DAY">
+  <data><name>Copa TDF ${u}</name><id>T-${u}</id><city>Ciudad de Prueba</city><state>Prueba</state>
+    <organizer popid="9999999" name="organizador de prueba"/><startdate>01/02/2030</startdate></data>
+  <players>${pl(myPid, 'PRUEBA', 'UNO')}${pl(rivalPid, 'PRUEBA', 'DOS')}${pl(ghost, 'SIN', 'CUENTA')}</players>
+  <pods><pod category="2" stage="1">
+    <subgroups><subgroup number="1"><players><player userid="${myPid}"/><player userid="${rivalPid}"/><player userid="${ghost}"/></players></subgroup></subgroups>
+    <rounds>
+      <round number="1" type="3" stage="6"><matches>${mt(1, myPid, rivalPid, 1)}${mt(5, ghost, null, 2)}</matches></round>
+      <round number="2" type="3" stage="6"><matches>${mt(0, ghost, myPid, 1)}${mt(5, rivalPid, null, 2)}</matches></round>
+    </rounds>
+  </pod></pods>
+  <standings><pod category="2" type="finished"></pod></standings>
+</tournament>`;
+  await call('/api/tournaments/import-tdf', { method: 'POST', expect: 400, body: { tdf: '<nada/>' } });
+  const imp = await call('/api/tournaments/import-tdf', { method: 'POST', expect: 201, body: { tdf } });
+  const again = await call('/api/tournaments/import-tdf', { method: 'POST', expect: 200, body: { tdf } });
+  if (!again.data.updated || String(again.data.tournament.id) !== String(imp.data.tournament.id)) throw new Error('re-importar debería actualizar');
+  ok(`TDF importado id=${imp.data.tournament.id}; re-importar actualiza; archivo inválido rechazado`);
+  const meTdf = (await call('/api/tournaments/me', { expect: 200 })).data;
+  const live = meTdf.active.find(a => String(a.tournament.id) === String(imp.data.tournament.id));
+  if (!live || live.round !== 2 || live.table_no !== 1 || live.opponent?.display_name !== 'Sin C.')
+    throw new Error(`partida en curso del TDF incorrecta: ${JSON.stringify(live)}`);
+  if (!meTdf.history.some(h => h.source === 'tdf' && h.wins === 1)) throw new Error('el TDF no aparece en el historial');
+  ok(`TDF en vivo: ronda ${live.round}, mesa ${live.table_no} contra ${live.opponent.display_name}; aparece en el historial`);
+  cookie = '';
+  const anon = JSON.stringify((await call(`/api/tournaments/${imp.data.tournament.id}`, { expect: 200 })).data);
+  if ([myPid, rivalPid, ghost].some(x => anon.includes(x)) || anon.includes('01/01/2000') || anon.includes('birth')) throw new Error('el detalle público expone IDs o fechas de nacimiento');
+  ok('el detalle público no expone IDs de jugador ni fechas de nacimiento');
+  cookie = host;
+  await call(`/api/tournaments/${imp.data.tournament.id}`, { method: 'DELETE', expect: 200 });
+  ok('torneo importado quitado');
   await call('/api/auth/logout', { method: 'POST', expect: 200 });
   const me = await call('/api/auth/me', { expect: 200 });
   if (me.data.user) throw new Error('la sesión sigue activa tras cerrar sesión');

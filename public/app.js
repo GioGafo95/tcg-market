@@ -433,7 +433,7 @@ async function viewListingForm(id) {
             <input name="card_name" required maxlength="120" value="${esc(l.card_name)}" placeholder="ej. Charizard ex / Dark Magician" autocomplete="off">
             <button type="button" class="btn" id="lookup">Buscar</button>
           </div>
-          <div class="card-meta" style="margin-top:.3rem">Escribe y elige tu carta exacta (edición y rareza): rellenamos los datos, la imagen oficial y el precio estimado de mercado.</div>
+          <div class="card-meta" style="margin-top:.3rem">Escribe y elige tu carta exacta (edición y rareza): rellenamos los datos, la imagen oficial y el precio estimado de mercado. Puedes afinar con el número (ej. "Pikachu 25", "Charizard ex 199/165") o el código de edición de Yu-Gi-Oh! (ej. "LOB-EN001").</div>
           <div class="lookup-results" id="results"></div>
         </div>
         <div id="refBox"></div>
@@ -507,34 +507,55 @@ async function viewListingForm(id) {
   }
   f.price.addEventListener('input', renderPriceHint);
 
-  async function search() {
+  // Resultados acumulados de la búsqueda actual (se agregan páginas con "Ver más")
+  let found = [], foundFx = null, foundSource = '';
+  const resultBtn = (r, i) => `
+    <button type="button" data-i="${i}">
+      ${safeImg(r.image_small) ? `<img src="${esc(r.image_small)}" alt="" loading="lazy">` : '<span class="no-img">✦</span>'}
+      <b>${esc(r.card_name)}</b><br>
+      <span class="muted">${esc(r.set_name)} ${esc(r.card_code)}</span><br>
+      <span class="muted">${esc(r.rarity)}</span>
+      ${r.market_price_mxn ? `<div class="est-chip">${money(r.market_price_mxn)}</div>`
+        : r.market_price ? `<div class="est-chip">${usd(r.market_price)}</div>` : ''}
+    </button>`;
+
+  async function search(page = 1) {
     const name = f.card_name.value.trim();
     if (name.length < 2) { box.innerHTML = ''; return; }
-    box.innerHTML = '<span class="muted">Buscando…</span>';
     const game = f.game.value;
+    const more = document.getElementById('moreResults');
+    if (page === 1) { found = []; foundSource = ''; box.innerHTML = '<span class="muted">Buscando…</span>'; }
+    else if (more) { more.disabled = true; more.textContent = 'Cargando…'; }
     try {
-      const { results, fx } = await api(`/api/lookup?${new URLSearchParams({ game, q: name })}`);
+      const qs = new URLSearchParams({ game, q: name, page, ...(page > 1 && foundSource ? { source: foundSource } : {}) });
+      const { results, fx, has_more, source } = await api(`/api/lookup?${qs}`);
       if (f.game.value !== game || f.card_name.value.trim() !== name) return; // llegó una búsqueda más nueva
-      if (!results.length) { box.innerHTML = '<span class="muted">Sin resultados. Puedes rellenar los datos a mano.</span>'; return; }
-      box.innerHTML = results.map((r, i) => `
-        <button type="button" data-i="${i}">
-          ${r.image_small ? `<img src="${esc(r.image_small)}" alt="" loading="lazy">` : ''}
-          <b>${esc(r.card_name)}</b><br>
-          <span class="muted">${esc(r.set_name)} ${esc(r.card_code)}</span><br>
-          <span class="muted">${esc(r.rarity)}</span>
-          ${r.market_price_mxn ? `<div class="est-chip">${money(r.market_price_mxn)}</div>`
-            : r.market_price ? `<div class="est-chip">${usd(r.market_price)}</div>` : ''}
-        </button>`).join('');
-      box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-        const r = results[b.dataset.i];
+      if (page === 1) foundSource = source || '';
+      // Sin duplicados al juntar páginas
+      const seen = new Set(found.map(r => r.ref_id));
+      found.push(...results.filter(r => !seen.has(r.ref_id)));
+      foundFx = fx;
+      if (!found.length) {
+        box.innerHTML = `<span class="muted">Sin resultados. Prueba con el nombre en inglés, agrega el número (ej. "Pikachu 25")
+          o el código de edición (ej. "LOB-EN001"), o rellena los datos a mano.</span>`;
+        return;
+      }
+      box.innerHTML = `
+        <div class="lookup-count muted">${found.length}${has_more ? '+' : ''} resultado(s) · elige tu edición exacta</div>
+        ${found.map(resultBtn).join('')}
+        ${has_more ? `<button type="button" class="btn small more" id="moreResults" data-page="${page + 1}">Ver más resultados</button>` : ''}`;
+      box.querySelectorAll('button[data-i]').forEach(b => b.addEventListener('click', () => {
+        const r = found[b.dataset.i];
         for (const k of ['card_name', 'set_name', 'card_code', 'rarity']) f[k].value = r[k] || '';
         ref = { ref_id: r.ref_id, image: r.image_small || r.image_url, market_price: r.market_price_mxn, usd: r.market_price,
-                market_source: r.market_source, fx };
+                market_source: r.market_source, fx: foundFx };
         box.innerHTML = ''; renderRef();
         if (!f.price.value && r.market_price_mxn) { f.price.value = Math.round(r.market_price_mxn); renderPriceHint(); }
       }));
+      document.getElementById('moreResults')?.addEventListener('click', e => search(Number(e.currentTarget.dataset.page)));
     } catch (err) {
-      box.innerHTML = `<span class="muted">${esc(err.message)}</span>`;
+      if (page === 1) box.innerHTML = `<span class="muted">${esc(err.message)}</span>`;
+      else if (more) { more.disabled = false; more.textContent = 'Reintentar'; toast(err.message); }
     }
   }
   let t;
@@ -663,7 +684,7 @@ function vsCard(m, tournament) {
         <div class="vs-sword">⚔</div>
         <div class="vs-player"><span class="muted">Rival</span>
           <b>${esc(m.opponent?.display_name || '—')}</b>
-          <span>@${esc(m.opponent?.username || '')} · ${record(m.opponent?.record)}${m.opponent?.record ? ` · ${m.opponent.record.place}º` : ''}</span></div>
+          <span>${m.opponent?.username ? `@${esc(m.opponent.username)} · ` : ''}${record(m.opponent?.record)}${m.opponent?.record ? ` · ${m.opponent.record.place}º` : ''}</span></div>
       </div>
       ${done}
     </div>`;
@@ -712,11 +733,12 @@ function bindPokemonIdForm(after) {
 function tournamentTile(t) {
   return `
     <a class="t-tile" href="#/torneo/${t.id}">
-      <span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status === 'running' ? ` · ronda ${t.current_round}` : ''}</span>
+      <span><span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status === 'running' ? ` · ronda ${t.current_round}` : ''}</span>
+        ${t.source === 'tdf' ? '<span class="badge t-tom" title="Importado del archivo oficial de TOM">TOM</span>' : ''}</span>
       <div class="card-name">${esc(t.name)}</div>
       <div class="card-meta">📅 ${fmtDate(t.starts_at)}</div>
       ${t.location ? `<div class="card-meta">📍 ${esc(t.location)}</div>` : ''}
-      <div class="card-meta">👥 ${t.player_count} jugador(es)${t.rounds ? ` · ${t.rounds} rondas` : ''} · organiza @${esc(t.organizer_username)}</div>
+      <div class="card-meta">👥 ${t.player_count} jugador(es)${t.rounds ? ` · ${t.rounds} rondas` : ''} · ${t.source === 'tdf' ? 'importado por' : 'organiza'} @${esc(t.organizer_username)}</div>
     </a>`;
 }
 
@@ -738,7 +760,9 @@ async function viewTournaments() {
         <h1>La arena del reino</h1>
         <p class="muted">Vincula tu ID de jugador, inscríbete en torneos de tu zona y entérate al instante de contra quién juegas cada ronda.</p>
       </div>
-      ${currentUser ? '<a class="btn primary" href="#/torneos/nuevo">+ Organizar torneo</a>' : ''}
+      ${currentUser ? `<div class="t-actions">
+        <a class="btn" href="#/torneos/importar">⬆ Importar TDF de TOM</a>
+        <a class="btn primary" href="#/torneos/nuevo">+ Organizar torneo</a></div>` : ''}
     </div>
 
     ${me ? `
@@ -764,7 +788,7 @@ async function viewTournaments() {
         <div class="panel" style="overflow-x:auto">
           <table class="mine"><thead><tr><th>Torneo</th><th>Fecha</th><th>Estado</th><th>Récord</th><th>Lugar</th><th>Últimas</th></tr></thead>
           <tbody>${me.history.map(h => `<tr>
-            <td><a href="#/torneo/${h.id}">${esc(h.name)}</a></td><td>${fmtDate(h.starts_at)}</td>
+            <td><a href="#/torneo/${h.id}">${esc(h.name)}</a>${h.source === 'tdf' ? ' <span class="badge t-tom">TOM</span>' : ''}</td><td>${fmtDate(h.starts_at)}</td>
             <td><span class="badge t-${h.status}">${T_STATUS[h.status]}</span></td>
             <td><b>${record(h)}</b></td><td>${h.place && h.status !== 'registration' ? `${h.place}º de ${h.player_count}` : '—'}</td>
             <td>${pills(h.last)}</td></tr>`).join('')}</tbody></table>
@@ -809,10 +833,19 @@ function viewTournamentForm() {
 async function viewTournament(id) {
   const d = await api(`/api/tournaments/${id}`);
   const t = d.tournament, me = d.me;
-  const nameOf = (p) => (p ? `${esc(p.display_name)} <span class="muted">@${esc(p.username)}</span>` : '—');
+  const isTdf = t.source === 'tdf';
+  // En torneos de TOM los jugadores se identifican por su ID de jugador Pokémon
+  const myKey = isTdf ? me.key : currentUser?.id;
+  const isMe = (p) => p && myKey != null && String(p.user_id) === String(myKey);
+  const multiCat = isTdf && (t.categories || []).length > 1;
+  const nameOf = (p) => (p ? `${p.username ? `<a href="#/vendedor/${encodeURIComponent(p.username)}">${esc(p.display_name)}</a> <span class="muted">@${esc(p.username)}</span>`
+                                           : esc(p.display_name)}` : '—');
+  // Ronda en curso de cada categoría (en un TDF cada categoría numera sus rondas)
+  const lastRound = {};
+  for (const r of d.rounds) lastRound[r.category || ''] = Math.max(lastRound[r.category || ''] || 0, r.round);
   const resultCell = (m, round) => {
     if (m.bye) return '<span class="badge cond">Bye</span>';
-    if (d.can_manage && t.status === 'running' && round === t.current_round) {
+    if (!isTdf && d.can_manage && t.status === 'running' && round === t.current_round) {
       return `<select data-res="${round}/${m.table_no}">
         ${[['', 'Pendiente'], ['p1', `Gana ${m.player1.display_name}`], ['p2', `Gana ${m.player2.display_name}`], ['tie', 'Empate']]
           .map(([v, txt]) => `<option value="${v}" ${(m.result || '') === v ? 'selected' : ''}>${esc(txt)}</option>`).join('')}
@@ -827,9 +860,11 @@ async function viewTournament(id) {
     <div class="t-hero">
       ${emblemSVG()}
       <div>
-        <span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status !== 'registration' ? ` · ronda ${t.current_round}${t.rounds ? ` de ${t.rounds}` : ''}` : ''}</span>
+        <span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status !== 'registration' && !isTdf ? ` · ronda ${t.current_round}${t.rounds ? ` de ${t.rounds}` : ''}` : ''}</span>
+        ${isTdf ? `<span class="badge t-tom">Importado de TOM</span> ${(t.categories || []).map(c => `<span class="badge cond">${esc(c)}</span>`).join(' ')}` : ''}
         <h1>${esc(t.name)}</h1>
-        <p class="muted">📅 ${fmtDate(t.starts_at)}${t.location ? ` · 📍 ${esc(t.location)}` : ''} · 👥 ${t.player_count} jugador(es) · organiza @${esc(t.organizer_username)}</p>
+        <p class="muted">📅 ${fmtDate(t.starts_at)}${t.location ? ` · 📍 ${esc(t.location)}` : ''} · 👥 ${t.player_count} jugador(es) ·
+          ${isTdf ? `organiza ${esc(t.organizer_tom || '—')} · importado por @${esc(t.organizer_username)}` : `organiza @${esc(t.organizer_username)}`}</p>
       </div>
       <div class="t-actions">
         ${t.status === 'registration' && currentUser
@@ -856,7 +891,20 @@ async function viewTournament(id) {
         </div>
       </div>` : ''}
 
-    ${d.can_manage ? `
+    ${d.can_manage && isTdf ? `
+      <div class="panel organizer">
+        <h2>Torneo importado de TOM</h2>
+        <p class="muted">${t.status === 'running'
+          ? 'Para que los jugadores vean su siguiente rival, sube el TDF actualizado cada vez que emparejes una ronda en TOM.'
+          : 'Si corregiste algo en TOM, sube el TDF de nuevo y se reemplazan las rondas y resultados.'}</p>
+        <div class="t-actions">
+          <label class="btn primary" for="tdfUpdate">⬆ Actualizar con TDF nuevo</label>
+          <input type="file" id="tdfUpdate" accept=".tdf,.xml" hidden>
+          <button class="btn danger" id="del">Quitar torneo</button>
+        </div>
+      </div>` : ''}
+
+    ${d.can_manage && !isTdf ? `
       <div class="panel organizer">
         <h2>Panel de organizador</h2>
         <p class="muted">${t.status === 'registration' ? 'Cuando estén todos, genera la ronda 1: se cierran las inscripciones y se emparejan al azar.'
@@ -871,10 +919,10 @@ async function viewTournament(id) {
       </div>` : ''}
 
     ${d.rounds.length ? [...d.rounds].reverse().map(r => `
-      <h2>Ronda ${r.round}${r.round === t.current_round && t.status === 'running' ? ' <span class="badge t-running">en curso</span>' : ''}</h2>
+      <h2>${esc(r.label || `Ronda ${r.round}`)}${multiCat ? ` · ${esc(r.category)}` : ''}${r.round === lastRound[r.category || ''] && t.status === 'running' ? ' <span class="badge t-running">en curso</span>' : ''}</h2>
       <div class="panel" style="overflow-x:auto">
         <table class="mine pairings"><thead><tr><th>Mesa</th><th>Jugador 1</th><th></th><th>Jugador 2</th><th>Resultado</th></tr></thead>
-        <tbody>${r.matches.map(m => `<tr class="${[m.player1, m.player2].some(p => p && currentUser && p.user_id === currentUser.id) ? 'mine-row' : ''}">
+        <tbody>${r.matches.map(m => `<tr class="${[m.player1, m.player2].some(isMe) ? 'mine-row' : ''}">
           <td>${m.table_no}</td><td>${nameOf(m.player1)}</td><td class="muted">vs</td>
           <td>${m.bye ? '<span class="muted">— bye —</span>' : nameOf(m.player2)}</td><td>${resultCell(m, r.round)}</td></tr>`).join('')}</tbody></table>
       </div>`).join('') : ''}
@@ -882,16 +930,18 @@ async function viewTournament(id) {
     ${t.status !== 'registration' ? `
       <h2>Clasificación</h2>
       <div class="panel" style="overflow-x:auto">
-        <table class="mine"><thead><tr><th>#</th><th>Jugador</th><th>Récord</th><th>Puntos</th><th>% rivales</th></tr></thead>
-        <tbody>${d.standings.map(s => `<tr class="${currentUser && s.user_id === currentUser.id ? 'mine-row' : ''}">
-          <td>${s.place}${s.place === 1 && t.status === 'finished' ? ' 👑' : ''}</td><td>${nameOf(s)}</td>
+        ${isTdf ? '<p class="card-meta">Lugar oficial calculado por TOM. Récord con top cut incluido; puntos y % de rivales solo del suizo.</p>' : ''}
+        <table class="mine"><thead><tr><th>#</th><th>Jugador</th>${multiCat ? '<th>Categoría</th>' : ''}<th>Récord</th><th>Puntos</th><th>% rivales</th></tr></thead>
+        <tbody>${d.standings.map(s => `<tr class="${isMe(s) ? 'mine-row' : ''}">
+          <td>${s.place}${s.place === 1 && t.status === 'finished' ? ' 👑' : ''}</td><td>${nameOf(s)}</td>${multiCat ? `<td>${esc(s.category)}</td>` : ''}
           <td>${record(s)}</td><td><b>${s.points}</b></td><td>${s.opp_win_pct}%</td></tr>`).join('')}</tbody></table>
       </div>` : ''}
 
-    <h2>Jugadores inscritos (${d.players.length})</h2>
+    <h2>${isTdf ? 'Jugadores' : 'Jugadores inscritos'} (${d.players.length})</h2>
+    ${isTdf ? '<p class="muted">Los jugadores con cuenta en la app aparecen con su usuario; los demás, con nombre e inicial del apellido.</p>' : ''}
     ${d.players.length ? `<div class="panel" style="overflow-x:auto">
-      <table class="mine"><thead><tr><th>Jugador</th><th>Zona</th>${d.can_manage ? '<th>ID Pokémon</th>' : ''}</tr></thead>
-      <tbody>${d.players.map(p => `<tr><td>${nameOf(p)}</td><td>${esc(p.location || '—')}</td>${d.can_manage ? `<td>${esc(p.pokemon_id || '—')}</td>` : ''}</tr>`).join('')}</tbody></table>
+      <table class="mine"><thead><tr><th>Jugador</th>${isTdf ? '<th>Categoría</th>' : '<th>Zona</th>'}${d.can_manage ? '<th>ID Pokémon</th>' : ''}</tr></thead>
+      <tbody>${d.players.map(p => `<tr class="${isMe(p) ? 'mine-row' : ''}"><td>${nameOf(p)}</td><td>${esc((isTdf ? p.category : p.location) || '—')}</td>${d.can_manage ? `<td>${esc(p.pokemon_id || '—')}</td>` : ''}</tr>`).join('')}</tbody></table>
     </div>` : '<p class="muted">Todavía no hay jugadores inscritos.</p>'}`;
 
   const reload = () => viewTournament(id);
@@ -907,8 +957,18 @@ async function viewTournament(id) {
     await api(`/api/tournaments/${id}/finish`, { method: 'POST' }); toast('Torneo finalizado'); reload();
   });
   act('del', async () => {
-    if (!confirm('¿Borrar este torneo? No se puede deshacer.')) { document.getElementById('del').disabled = false; return; }
-    await api(`/api/tournaments/${id}`, { method: 'DELETE' }); toast('Torneo borrado'); go('#/torneos');
+    const msg = isTdf ? '¿Quitar este torneo importado? Podrás volver a importarlo con el TDF.' : '¿Borrar este torneo? No se puede deshacer.';
+    if (!confirm(msg)) { document.getElementById('del').disabled = false; return; }
+    await api(`/api/tournaments/${id}`, { method: 'DELETE' }); toast(isTdf ? 'Torneo quitado' : 'Torneo borrado'); go('#/torneos');
+  });
+  document.getElementById('tdfUpdate')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      await uploadTdf(file);
+      toast('Torneo actualizado con el TDF nuevo'); reload();
+    } catch (err) { document.getElementById('err').textContent = err.message; }
   });
   $app.querySelectorAll('[data-res]').forEach(s => s.addEventListener('change', async () => {
     try {
@@ -917,6 +977,58 @@ async function viewTournament(id) {
     } catch (err) { document.getElementById('err').textContent = err.message; }
   }));
   bindPokemonIdForm(reload);
+}
+
+// Lee el archivo TDF en el navegador y lo manda al servidor (que lo valida y lo interpreta)
+async function uploadTdf(file) {
+  if (file.size > 4 * 1024 * 1024) throw new Error('El archivo es demasiado grande para ser un TDF.');
+  const tdf = await file.text();
+  if (!/<tournament\b/.test(tdf)) throw new Error('Ese archivo no parece un TDF de TOM.');
+  return api('/api/tournaments/import-tdf', { method: 'POST', body: { tdf } });
+}
+
+function viewTdfImport() {
+  if (!requireLogin()) return;
+  const pid = currentUser.pokemon_id;
+  $app.innerHTML = `
+    <p><a href="#/torneos">← Torneos</a></p>
+    <div class="panel form-wide">
+      <h1>Importar torneo de TOM</h1>
+      <p class="muted">Sube el archivo <b>.tdf</b> que genera TOM (Tournament Operations Manager), el mismo que se sube a Play! Tools.
+        El torneo queda con todas sus rondas, resultados y la clasificación oficial, y aparece en el historial de cada jugador
+        que tenga su ID de jugador vinculado en la app.</p>
+      <ul class="card-meta tdf-notes">
+        <li>Lo puede subir el organizador o cualquier jugador que aparezca en el archivo (tu ID debe estar en el TDF).</li>
+        <li>Si el torneo ya existe, se actualiza: súbelo después de emparejar cada ronda para que los jugadores vean su siguiente rival.</li>
+        <li>No se guardan las fechas de nacimiento del archivo. Quien no tenga cuenta aparece con nombre e inicial del apellido.</li>
+      </ul>
+      ${pid ? `
+        <label class="drop" id="drop" for="tdfFile">
+          <span class="drop-icon">⬆</span>
+          <b>Elige o arrastra aquí el archivo .tdf</b>
+          <span class="card-meta">Tu ID de jugador vinculado: ${esc(pid)}</span>
+        </label>
+        <input type="file" id="tdfFile" accept=".tdf,.xml" hidden>`
+      : `<p><b>Primero vincula tu ID de jugador Pokémon:</b></p>${pokemonIdForm('')}`}
+      <div class="error" id="err"></div>
+    </div>`;
+  bindPokemonIdForm(viewTdfImport);
+  const input = document.getElementById('tdfFile');
+  if (!input) return;
+  const send = async (file) => {
+    const err = document.getElementById('err');
+    const drop = document.getElementById('drop');
+    err.textContent = ''; drop.classList.add('busy');
+    try {
+      const { tournament, updated } = await uploadTdf(file);
+      toast(updated ? 'Torneo actualizado' : '¡Torneo importado!'); go(`#/torneo/${tournament.id}`);
+    } catch (e) { err.textContent = e.message; drop.classList.remove('busy'); }
+  };
+  input.addEventListener('change', () => { if (input.files[0]) send(input.files[0]); input.value = ''; });
+  const drop = document.getElementById('drop');
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) send(e.dataTransfer.files[0]); });
 }
 
 function requireLogin() {
@@ -943,7 +1055,7 @@ async function router() {
       case 'vender': return await viewListingForm();
       case 'editar': return await viewListingForm(parts[1]);
       case 'perfil': return viewProfile();
-      case 'torneos': return parts[1] === 'nuevo' ? viewTournamentForm() : await viewTournaments();
+      case 'torneos': return parts[1] === 'nuevo' ? viewTournamentForm() : parts[1] === 'importar' ? viewTdfImport() : await viewTournaments();
       case 'torneo': return await viewTournament(parts[1]);
       default: $app.innerHTML = '<div class="empty">Página no encontrada. <a href="#/">Ir al catálogo</a></div>';
     }
