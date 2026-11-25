@@ -68,5 +68,9 @@ jobs:
           aws-region: us-east-1
       - name: Desplegar
         run: node scripts/deploy-qa.mjs
+        env:
+          QA_URL: ${{ vars.QA_URL }}
+          # Dominio propio (CloudFront + certificado). Se puede cambiar con la variable QA_DOMAIN del repo.
+          QA_DOMAIN: ${{ vars.QA_DOMAIN || 'tcg.macai.com.mx' }}
       - name: Verificar QA
         run: node scripts/smoke-test.mjs "${{ vars.QA_URL }}" --readonly

@@ -95,4 +95,48 @@ if (role && role !== existingRole) {
 }
 
 rmSync('.build', { recursive: true, force: true });
+
+// ---------- Dominio propio (opcional): QA_DOMAIN=tcg.macai.com.mx y QA_URL=<endpoint de la Web Function> ----------
+// Las Web Functions no aceptan dominios propios: se pone CloudFront delante con un certificado de ACM (us-east-1).
+// El certificado se valida con un registro DNS que se agrega a mano en el proveedor del dominio (GoDaddy); mientras
+// no esté validado, este paso solo muestra qué registro agregar y no detiene el despliegue.
+async function setupDomain(domain, endpointUrl) {
+  step(`Dominio propio ${domain}`);
+  const origin = new URL(endpointUrl).host;
+  const certs = awsJson(['acm', 'list-certificates', '--certificate-statuses', 'PENDING_VALIDATION', 'ISSUED']).CertificateSummaryList || [];
+  let arn = certs.find(c => c.DomainName === domain)?.CertificateArn;
+  if (!arn) {
+    arn = awsJson(['acm', 'request-certificate', '--domain-name', domain, '--validation-method', 'DNS',
+      '--idempotency-token', `tcgmarket${ENV}`, '--tags', 'Key=app,Value=tcg-market', `Key=env,Value=${ENV}`]).CertificateArn;
+    console.log(`  certificado solicitado: ${arn}`);
+  }
+  // ACM tarda unos segundos en generar el registro de validación
+  let cert;
+  for (let i = 0; i < 10; i++) {
+    cert = awsJson(['acm', 'describe-certificate', '--certificate-arn', arn]).Certificate;
+    if (cert.Status === 'ISSUED' || cert.DomainValidationOptions?.[0]?.ResourceRecord) break;
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  if (cert.Status !== 'ISSUED') {
+    const rr = cert.DomainValidationOptions?.[0]?.ResourceRecord;
+    console.log(`  ⏳ El certificado está ${cert.Status}. Agrega este registro en GoDaddy (DNS de ${domain.split('.').slice(1).join('.')}):`);
+    if (rr) console.log(`     Tipo: ${rr.Type}\n     Nombre: ${rr.Name.replace(/\.$/, '')}\n     Valor: ${rr.Value.replace(/\.$/, '')}`);
+    console.log('     Cuando AWS lo valide (minutos a un par de horas), vuelve a correr el despliegue para crear CloudFront.');
+    return;
+  }
+  const stack = `tcg-market-${ENV}-domain`;
+  aws(['cloudformation', 'deploy', '--stack-name', stack, '--template-file', 'infra/qa-domain.yaml', '--no-fail-on-empty-changeset',
+    '--parameter-overrides', `EnvName=${ENV}`, `DomainName=${domain}`, `CertificateArn=${arn}`, `OriginDomain=${origin}`,
+    '--tags', 'app=tcg-market', `env=${ENV}`], { inherit: true });
+  const outputs = awsJson(['cloudformation', 'describe-stacks', '--stack-name', stack]).Stacks[0].Outputs
+    .reduce((o, x) => ({ ...o, [x.OutputKey]: x.OutputValue }), {});
+  console.log(`  ✔ CloudFront listo: ${outputs.DistributionDomain}`);
+  console.log(`     En GoDaddy, el registro CNAME "${domain.split('.')[0]}" debe apuntar a ${outputs.DistributionDomain}`);
+}
+
+if (process.env.QA_DOMAIN && process.env.QA_URL) {
+  try { await setupDomain(process.env.QA_DOMAIN, process.env.QA_URL); }
+  catch (err) { console.warn(`\n⚠ No se pudo configurar el dominio (la app sí quedó desplegada): ${err.message}`); }
+}
+
 console.log('\n✔ QA desplegado. Prueba de humo: node scripts/smoke-test.mjs <URL del endpoint>');

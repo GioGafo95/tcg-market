@@ -74,6 +74,24 @@ node scripts/smoke-test.mjs https://<endpoint-de-qa>
 El almacenamiento se elige con la variable `STORAGE`: `aws` (DynamoDB `TABLE_NAME` + S3 `BUCKET_NAME`)
 o, por defecto, local (SQLite + carpeta `uploads/`).
 
+### Dominio propio: `tcg.macai.com.mx`
+
+Los endpoints de las Web Functions no aceptan dominios propios, así que se pone **CloudFront** delante
+([infra/qa-domain.yaml](infra/qa-domain.yaml)) con un certificado de **ACM**. Sin caché: cada petición pasa a la app
+(se reenvían cookies y query string, pero no el `Host`, porque la Web Function enruta por su propio dominio).
+El dominio se toma de la variable del repo `QA_DOMAIN` (por defecto `tcg.macai.com.mx`). Pasos, una sola vez:
+
+1. **Dar permisos al rol de despliegue** (ACM y CloudFront), con credenciales de administrador:
+   ```
+   aws cloudformation deploy --stack-name tcg-market-qa-github-deploy --template-file infra/github-deploy-role.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides OidcProviderArn=<ARN del proveedor OIDC>
+   ```
+   (usa el mismo nombre de stack con el que se creó el rol la primera vez).
+2. **Desplegar** (push a `main` o "Run workflow"). El log del paso *Desplegar* muestra un registro **CNAME de validación**.
+3. **En GoDaddy** → DNS de `macai.com.mx` → agregar ese CNAME (nombre `_xxxx.tcg`, valor `_yyyy.acm-validations.aws`).
+4. Cuando AWS lo valide (minutos a un par de horas), **volver a desplegar**: se crea CloudFront y el log muestra
+   su dominio (`dxxxx.cloudfront.net`).
+5. **En GoDaddy** → agregar un CNAME `tcg` → `dxxxx.cloudfront.net`. En unos minutos responde `https://tcg.macai.com.mx`.
+
 ## Estructura
 
 - `server.js` — API REST (Express)

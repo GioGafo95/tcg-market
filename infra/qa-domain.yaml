@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  TCG Market - dominio propio para QA (ej. tcg.macai.com.mx). Los endpoints de Lambda Web Functions no aceptan
+  dominios propios, así que se pone CloudFront delante: certificado de ACM + distribución con el endpoint como origen.
+  Lo crea scripts/deploy-qa.mjs cuando el certificado ya está validado. Sin caché: todo pasa directo a la app.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: qa
+  DomainName:
+    Type: String
+    Description: Dominio público (ej. tcg.macai.com.mx)
+  CertificateArn:
+    Type: String
+    Description: Certificado de ACM en us-east-1 para el dominio (ya validado)
+  OriginDomain:
+    Type: String
+    Description: Dominio del endpoint de la Web Function (sin https://)
+
+Resources:
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub tcg-market-${EnvName} (${DomainName})
+        Aliases: [!Ref DomainName]
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100   # Norteamérica y Europa: el más barato
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: webfunction
+            DomainName: !Ref OriginDomain
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+              OriginReadTimeout: 30
+        DefaultCacheBehavior:
+          TargetOriginId: webfunction
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # Políticas administradas por AWS:
+          #  - CachingDisabled: no guarda nada en caché (la app responde según la sesión)
+          #  - AllViewerExceptHostHeader: pasa cookies, encabezados y query string, pero NO el Host
+          #    (la Web Function enruta por su propio dominio y respondería 404 con otro Host)
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+      Tags:
+        - { Key: app, Value: tcg-market }
+        - { Key: env, Value: !Ref EnvName }
+
+Outputs:
+  DistributionDomain:
+    Description: Apunta aquí el CNAME del dominio
+    Value: !GetAtt Distribution.DomainName
+  DistributionId:
+    Value: !Ref Distribution

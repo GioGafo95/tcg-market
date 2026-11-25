@@ -1,4 +1,4 @@
-// TCG Market — SPA en JavaScript puro con rutas por hash (#/...)
+// Macai TCG — SPA en JavaScript puro con rutas por hash (#/...)
 import { sceneSVG, emblemSVG } from './scene.js';
 
 // Efecto holográfico: la carta se inclina en 3D y el brillo sigue al ratón

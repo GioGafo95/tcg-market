@@ -41,7 +41,9 @@ Resources:
               - Sid: Stack
                 Effect: Allow
                 Action: cloudformation:*
-                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/tcg-market-${EnvName}/*
+                Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/tcg-market-${EnvName}/*
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/tcg-market-${EnvName}-domain/*
               - Sid: StackLectura
                 Effect: Allow
                 Action: [cloudformation:ValidateTemplate, cloudformation:GetTemplateSummary]
@@ -80,6 +82,28 @@ Resources:
               - Sid: WebFunctionCuenta
                 Effect: Allow
                 Action: [lambda:GetWebAccountSettings, lambda:ListWebFunctions]
+                Resource: '*'
+              # Dominio propio (infra/qa-domain.yaml): certificado de ACM y distribución de CloudFront
+              - Sid: Certificado
+                Effect: Allow
+                Action: [acm:RequestCertificate, acm:DescribeCertificate, acm:ListCertificates, acm:AddTagsToCertificate, acm:ListTagsForCertificate]
+                Resource: '*'
+              - Sid: CloudFront
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateDistribution
+                  - cloudfront:CreateDistributionWithTags
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:TagResource
+                  - cloudfront:UntagResource
+                  - cloudfront:ListTagsForResource
+                Resource: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/*
+              - Sid: CloudFrontLectura
+                Effect: Allow
+                Action: [cloudfront:ListDistributions, cloudfront:GetCachePolicy, cloudfront:GetOriginRequestPolicy]
                 Resource: '*'
       Tags:
         - { Key: app, Value: tcg-market }
