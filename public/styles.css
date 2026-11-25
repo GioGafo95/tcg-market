@@ -206,16 +206,48 @@ h2 { font-size: 1.5rem; margin: 1.6rem 0 .8rem; }
 @keyframes flag { 50% { transform: scaleX(.75) skewY(6deg); } }
 .windows { animation: candle 3s ease-in-out infinite; }
 @keyframes candle { 50% { opacity: .75; } }
-.dragon-path { animation: fly 38s linear infinite; }
+/* Dragón y caballero comparten un ciclo de 60 s: primero cruza el dragón por el cielo
+   y, cuando desaparece, el caballero calavera cabalga por la colina */
+.dragon-path { animation: fly 60s linear infinite; }
 @keyframes fly {
   0% { transform: translate(-220px, 210px) scale(.8); }
-  50% { transform: translate(720px, 120px) scale(.95); }
-  100% { transform: translate(1700px, 170px) scale(.8); }
+  27% { transform: translate(720px, 120px) scale(.95); }
+  55%, 100% { transform: translate(1700px, 170px) scale(.8); }
 }
+.knight-path { animation: ride 60s linear infinite; transform: translate(-200px, 442px) scale(.8); }
+@keyframes ride {
+  0%, 57% { transform: translate(-200px, 442px) scale(.8); }
+  62.2% { transform: translate(0, 442px) scale(.8); }
+  67.1% { transform: translate(230px, 422px) scale(.8); }
+  72% { transform: translate(460px, 434px) scale(.8); }
+  75.8% { transform: translate(640px, 438px) scale(.8); }
+  79.2% { transform: translate(800px, 420px) scale(.8); }
+  82.2% { transform: translate(940px, 416px) scale(.8); }
+  87.7% { transform: translate(1200px, 438px) scale(.8); }
+  92.8% { transform: translate(1440px, 432px) scale(.8); }
+  97%, 100% { transform: translate(1640px, 432px) scale(.8); }
+}
+.knight { animation: gallop .5s ease-in-out infinite; }
+@keyframes gallop { 50% { transform: translateY(-5px) rotate(-1.5deg); } }
+.leg { transform-box: fill-box; transform-origin: 50% 0; animation: stride .5s ease-in-out infinite; }
+.leg.back, .leg.front-far { animation-delay: -.25s; }
+@keyframes stride { 0%, 100% { transform: rotate(28deg); } 50% { transform: rotate(-28deg); } }
+.cape { transform-box: fill-box; transform-origin: 100% 20%; animation: cape .5s ease-in-out infinite; }
+@keyframes cape { 50% { transform: scaleX(.86) skewY(-5deg); } }
+.tail { transform-box: fill-box; transform-origin: 100% 0; animation: cape .5s ease-in-out infinite reverse; }
+.sword-arm { transform-box: fill-box; transform-origin: 0 50%; animation: brandish 1s ease-in-out infinite; }
+@keyframes brandish { 50% { transform: rotate(-10deg); } }
 .dragon { animation: glide 2.4s ease-in-out infinite; }
 @keyframes glide { 50% { transform: translateY(-10px); } }
 .wing { animation: flap .6s ease-in-out infinite; transform-box: fill-box; transform-origin: 80% 100%; }
 @keyframes flap { 50% { transform: scaleY(-.35); } }
+
+.crest { transform-box: fill-box; transform-origin: center; }
+.crest.bob { animation: bob 3.4s ease-in-out infinite; }
+.crest.bob.slow { animation-duration: 4.6s; animation-delay: -1.2s; }
+@keyframes bob { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-9px) rotate(3deg); } }
+.skull-eyes { animation: eyes 2.2s ease-in-out infinite; }
+@keyframes eyes { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 
 /* ---------- Encabezado de sección, pestañas y filtros ---------- */
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; scroll-margin-top: 90px; }
@@ -402,6 +434,82 @@ h2.step:first-of-type { border-top: 0; padding-top: 0; }
 }
 .photo.add span { font-size: .85rem; font-weight: 600; }
 .photo.add:hover { border-color: var(--violet); transform: translateY(-3px); background: #f1e9ff; }
+
+/* ---------- Torneos ---------- */
+.match-banner[hidden] { display: none; }
+.match-banner { position: sticky; top: 63px; z-index: 25; display: flex; flex-direction: column; gap: 2px; }
+.match-banner a {
+  display: block; padding: .55rem clamp(1rem, 4vw, 2.5rem); text-align: center; color: #fff; font-weight: 700;
+  background: linear-gradient(90deg, #6b1630, #9b2245 40%, #6b1630); box-shadow: 0 6px 20px -8px rgba(155, 34, 69, .9);
+  animation: pulseBar 2.4s ease-in-out infinite;
+}
+.match-banner a:hover { color: var(--gold); }
+@keyframes pulseBar { 50% { filter: brightness(1.18); } }
+
+.t-hero { display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap; margin-bottom: 1.4rem; }
+.t-hero > div:first-of-type { flex: 1; min-width: 240px; }
+.t-hero h1 { margin: .35rem 0; }
+.t-hero p { margin: 0; }
+.emblem { width: 96px; height: 102px; flex: none; filter: drop-shadow(0 8px 18px rgba(255, 209, 102, .35)); }
+.t-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
+.badge.t-registration { background: #d8f8ea; color: #0b7a55; }
+.badge.t-running { background: #ffe0e6; color: #b3264a; }
+.badge.t-finished { background: #eef0f7; color: #4a4466; }
+
+.t-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.2rem; }
+.t-tile {
+  display: flex; flex-direction: column; gap: .3rem; padding: 1.1rem 1.2rem; border-radius: var(--r);
+  color: var(--ink); background: var(--cream); box-shadow: var(--shadow); transition: transform .25s, box-shadow .25s;
+  border-top: 5px solid #9b2245;
+}
+.t-tile:hover { color: var(--ink); transform: translateY(-4px); box-shadow: 0 24px 44px -18px rgba(10, 4, 30, .8), 0 0 0 2px rgba(255, 209, 102, .7); }
+.t-tile .badge { align-self: flex-start; }
+
+.player-card { margin-bottom: 1.4rem; }
+.player-top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.player-card h2 { margin: 0 0 .2rem; }
+.player-card p { margin: 0; }
+.stat-row { display: flex; gap: .6rem; flex-wrap: wrap; }
+.tstat { min-width: 86px; padding: .55rem .8rem; border-radius: 16px; text-align: center; background: var(--cream-2); }
+.tstat b { display: block; font-family: var(--font-title); font-size: 1.6rem; line-height: 1.1; color: var(--ink); }
+.tstat span { font-size: .78rem; color: var(--ink-soft); }
+.tstat.win b { color: #0f9e6e; }
+.tstat.loss b { color: #c21f44; }
+.streak-line { margin: .9rem 0 !important; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.pills { display: inline-flex; gap: 4px; }
+.pill { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; font-family: var(--font-title); font-size: .78rem; color: #fff; }
+.pill.W { background: #16a974; } .pill.L { background: #d6345a; } .pill.T { background: #8a83a6; }
+
+.pid-form { margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #e0d4f5; }
+.pid-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .35rem; }
+.pid-row input { flex: 1; min-width: 160px; }
+
+.vs-list { display: grid; gap: 1rem; }
+.vs-card {
+  position: relative; margin-bottom: 1.4rem; padding: 1.1rem 1.4rem 1.3rem; border-radius: var(--r-lg); color: #fff; overflow: hidden;
+  background: radial-gradient(500px 200px at 50% 120%, rgba(255, 79, 109, .35), transparent 70%), linear-gradient(135deg, #2c1857, #4a1d4f 60%, #6b1630);
+  box-shadow: var(--shadow-lg), inset 0 0 0 2px rgba(255, 209, 102, .45);
+}
+.vs-list .vs-card { margin-bottom: 0; }
+.vs-head { font-family: var(--font-title); color: var(--text-soft); margin-bottom: .6rem; }
+.vs-head b { color: var(--gold); }
+.vs-head a { color: #fff; }
+.vs-body { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1rem; }
+.vs-player { display: flex; flex-direction: column; }
+.vs-player:last-child { text-align: right; }
+.vs-player b { font-family: var(--font-title); font-size: clamp(1.2rem, 2.6vw, 1.7rem); line-height: 1.15; }
+.vs-player span { font-size: .9rem; color: var(--text-soft); }
+.vs-sword { font-size: 2.6rem; color: var(--gold); text-shadow: 0 0 18px rgba(255, 209, 102, .8); animation: clash 1.8s ease-in-out infinite; }
+@keyframes clash { 50% { transform: scale(1.15) rotate(8deg); } }
+.vs-bye { font-size: 1.1rem; }
+.vs-result { margin-top: .8rem; font-family: var(--font-title); font-size: 1.1rem; }
+.vs-result.W { color: #5ff0b5; } .vs-result.L { color: #ff8da4; } .vs-result.T { color: var(--text-soft); }
+@media (max-width: 600px) { .vs-body { grid-template-columns: 1fr; text-align: center; } .vs-player:last-child { text-align: center; } }
+
+.organizer { margin-bottom: 1rem; border-left: 6px solid var(--gold); }
+.organizer h2 { margin-top: 0; }
+table.mine tr.mine-row td { background: #fff6dc; }
+table.pairings select { min-width: 190px; padding: .4rem .6rem; }
 
 /* ---------- Varios ---------- */
 .empty { text-align: center; padding: 3rem 1.2rem; border-radius: var(--r-lg); box-shadow: var(--shadow); font-size: 1.05rem; }

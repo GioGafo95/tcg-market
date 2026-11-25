@@ -1,5 +1,5 @@
 // Escena ilustrada de la portada: atardecer de fantasía con castillo, montañas,
-// luna, nubes, luciérnagas y un dragón que cruza el cielo. Todo en SVG, sin imágenes externas.
+// luna, nubes, luciérnagas, un dragón que cruza el cielo y, tras él, un caballero calavera a caballo. Todo en SVG, sin imágenes externas.
 
 const rand = (seed => () => (seed = (seed * 16807) % 2147483647) / 2147483647)(42);
 
@@ -24,37 +24,147 @@ const pine = (x, y, s) => `
     <path d="M0 -70 L18 -38 H10 L24 -14 H14 L28 8 H-28 L-14 -14 H-24 L-10 -38 H-18 Z"/>
   </g>`;
 
-// Castillo de cuento: torre central, dos torres laterales, almenas, ventanas encendidas y banderas
+const lancet = (x, y, w, h) => {
+  const r = w / 2;
+  return `<path d="M${x - r} ${y} v${-h} C${x - r} ${y - h - r * 1.1} ${x} ${y - h - r * 1.6} ${x} ${y - h - r * 1.8} C${x} ${y - h - r * 1.6} ${x + r} ${y - h - r * 1.1} ${x + r} ${y - h} v${h}z"/>`;
+};
+// Pináculo: aguja fina con un pequeño remate
+const pinnacle = (x, y, h, w = 6) => `<path d="M${x - w} ${y} L${x} ${y - h} L${x + w} ${y} Z"/><circle cx="${x}" cy="${y - h}" r="1.6"/>`;
+
+// Castillo gótico: catedral central con aguja altísima y rosetón, torres laterales con chapiteles,
+// arbotantes, pináculos, ventanas de lanceta encendidas y estandartes
 const castle = `
-  <g transform="translate(1250 330) scale(.95)">
-    <g fill="#3b2272">
-      <rect x="-40" y="-120" width="80" height="140" rx="4"/>
-      <path d="M-40 -120 v-12 h12 v12 h10 v-12 h12 v12 h12 v-12 h12 v12 h10 v-12 h12 v12z"/>
-      <rect x="-110" y="-70" width="46" height="90" rx="4"/>
-      <rect x="64" y="-80" width="46" height="100" rx="4"/>
-      <rect x="-64" y="-40" width="128" height="60"/>
-      <path d="M-64 -40 v-10 h12 v10 h12 v-10 h12 v10 h12 v-10 h12 v10 h12 v-10 h12 v10 h12 v-10 h12 v10 h12 v-10 h8 v10z"/>
+  <g transform="translate(1170 330) scale(.95)">
+    <g fill="#2b1852">
+      <!-- muralla baja con contrafuertes -->
+      <rect x="-128" y="-34" width="256" height="54"/>
+      <path d="M-128 -34 ${Array.from({ length: 16 }, (_, i) => `L${-128 + i * 16 + 8} -46 L${-128 + i * 16 + 16} -34`).join(' ')} Z"/>
+      <!-- torres laterales -->
+      <rect x="-114" y="-104" width="44" height="124"/>
+      <rect x="70" y="-116" width="44" height="136"/>
+      <!-- nave central -->
+      <rect x="-46" y="-150" width="92" height="170"/>
+      <!-- arbotantes -->
+      <path d="M-70 -64 Q-58 -112 -46 -120 L-46 -108 Q-56 -100 -62 -64 Z"/>
+      <path d="M70 -70 Q58 -118 46 -128 L46 -116 Q56 -106 62 -70 Z"/>
+      <!-- contrafuertes de la nave -->
+      <path d="M-54 20 V-120 L-46 -132 V20 Z M54 20 V-120 L46 -132 V20 Z"/>
     </g>
-    <g fill="#ff7eb6">
-      <path d="M-50 -132 L0 -200 L50 -132 Z"/>
-      <path d="M-118 -70 L-87 -122 L-56 -70 Z"/>
-      <path d="M56 -80 L87 -136 L118 -80 Z"/>
+    <!-- chapiteles y agujas -->
+    <g fill="#3d2470">
+      <path d="M-46 -150 L0 -292 L46 -150 Z"/>
+      <path d="M-118 -104 L-92 -210 L-66 -104 Z"/>
+      <path d="M66 -116 L92 -230 L118 -116 Z"/>
+      ${pinnacle(-46, -150, 34)}${pinnacle(46, -150, 34)}
+      ${pinnacle(-114, -104, 24, 5)}${pinnacle(-70, -104, 24, 5)}
+      ${pinnacle(70, -116, 24, 5)}${pinnacle(114, -116, 24, 5)}
+      ${pinnacle(-54, -120, 22, 4)}${pinnacle(54, -120, 22, 4)}
+      ${Array.from({ length: 7 }, (_, i) => pinnacle(-120 + i * 40, -46, 14, 4)).join('')}
     </g>
-    <g fill="#e0619a" opacity=".55">
-      <path d="M0 -200 L50 -132 H10 Z"/><path d="M-87 -122 L-56 -70 H-80 Z"/><path d="M87 -136 L118 -80 H94 Z"/>
+    <!-- luz de luna en un lado de las agujas -->
+    <g fill="#7a4fc0" opacity=".45">
+      <path d="M0 -292 L46 -150 H14 Z"/><path d="M-92 -210 L-66 -104 H-82 Z"/><path d="M92 -230 L118 -116 H102 Z"/>
     </g>
-    <g stroke="#2a1747" stroke-width="2.5">
-      <line x1="0" y1="-200" x2="0" y2="-226"/><line x1="-87" y1="-122" x2="-87" y2="-142"/><line x1="87" y1="-136" x2="87" y2="-156"/>
+    <!-- crochets (ganchos) en la aguja central -->
+    <g stroke="#3d2470" stroke-width="2" stroke-linecap="round">
+      ${Array.from({ length: 5 }, (_, i) => { const y = -170 - i * 24, dx = 46 * (292 + y) / 142; return `<line x1="${-dx}" y1="${y}" x2="${-dx - 6}" y2="${y - 4}"/><line x1="${dx}" y1="${y}" x2="${dx + 6}" y2="${y - 4}"/>`; }).join('')}
     </g>
-    <g fill="#ffd166" class="flags">
-      <path class="flag" d="M0 -226 l22 6 l-22 6z"/><path class="flag" d="M-87 -142 l16 5 l-16 5z"/><path class="flag" d="M87 -156 l16 5 l-16 5z"/>
+    <g stroke="#1e1238" stroke-width="2.5">
+      <line x1="0" y1="-292" x2="0" y2="-316"/><line x1="-92" y1="-210" x2="-92" y2="-230"/><line x1="92" y1="-230" x2="92" y2="-250"/>
+      <line x1="-7" y1="-306" x2="7" y2="-306"/>
     </g>
+    <g fill="#b3264a" class="flags">
+      <path class="flag" d="M-92 -230 l18 4 l-6 4 l6 4 l-18 2z"/><path class="flag" d="M92 -250 l18 4 l-6 4 l6 4 l-18 2z"/>
+    </g>
+    <!-- vidrieras y ventanas encendidas -->
     <g fill="#ffd166" class="windows">
-      <path d="M-10 -86 a10 10 0 0 1 20 0 v20 h-20z"/>
-      <rect x="-96" y="-44" width="16" height="20" rx="8"/><rect x="78" y="-52" width="16" height="20" rx="8"/>
-      <rect x="-30" y="-24" width="10" height="14" rx="5"/><rect x="20" y="-24" width="10" height="14" rx="5"/>
+      <circle cx="0" cy="-104" r="18"/>
+      ${lancet(-28, -40, 9, 26)}${lancet(28, -40, 9, 26)}
+      ${lancet(-14, -134, 6, 10)}${lancet(14, -134, 6, 10)}
+      ${lancet(-92, -60, 12, 22)}${lancet(92, -70, 12, 24)}
+      ${lancet(-92, -150, 7, 12)}${lancet(92, -164, 7, 12)}
+      ${lancet(-110, -4, 6, 10)}${lancet(110, -4, 6, 10)}
     </g>
-    <path d="M-16 20 v-26 a16 16 0 0 1 32 0 v26z" fill="#22133f"/>
+    <!-- tracería del rosetón -->
+    <g stroke="#2b1852" stroke-width="2" fill="none">
+      <circle cx="0" cy="-104" r="7"/>
+      ${Array.from({ length: 8 }, (_, i) => { const a = i * Math.PI / 4; return `<line x1="${(7 * Math.cos(a)).toFixed(1)}" y1="${(-104 + 7 * Math.sin(a)).toFixed(1)}" x2="${(18 * Math.cos(a)).toFixed(1)}" y2="${(-104 + 18 * Math.sin(a)).toFixed(1)}"/>`; }).join('')}
+      <line x1="-28" y1="-50" x2="-28" y2="-40"/><line x1="28" y1="-50" x2="28" y2="-40"/>
+    </g>
+    <!-- portal apuntado -->
+    <path d="M-18 20 v-30 C-18 -32 -6 -42 0 -46 C6 -42 18 -32 18 -10 v30z" fill="#170d2e"/>
+    <path d="M-18 20 v-30 C-18 -32 -6 -42 0 -46 C6 -42 18 -32 18 -10 v30" fill="none" stroke="#4a2c80" stroke-width="2.5"/>
+  </g>`;
+
+// Espada recta: hoja, guarda, empuñadura y pomo (apunta hacia arriba desde 0,0)
+const sword = (len = 62) => `
+  <path d="M-3 0 V${-len} L0 ${-len - 8} L3 ${-len} V0 Z" fill="#cfd3e6"/><path d="M0 ${-len - 8} L3 ${-len} V0 H0 Z" fill="#9aa0bd"/>
+  <rect x="-12" y="-2" width="24" height="5" rx="2" fill="#8a5a2b"/><rect x="-2.5" y="3" width="5" height="12" fill="#5a3a1e"/>
+  <circle cy="17" r="3.6" fill="#ffd166"/>`;
+
+// Calavera caricaturesca con ojos que brillan
+const skull = `
+  <path d="M-12 2 C-14 -12 -6 -18 0 -18 C6 -18 14 -12 12 2 C12 6 9 7 8 8 V12 H-8 V8 C-9 7 -12 6 -12 2 Z" fill="#f1e6cf"/>
+  <path d="M12 2 C12 6 9 7 8 8 V12 H3 V6 C8 4 10 -4 8 -14 C13 -10 13 -4 12 2 Z" fill="#d6c7a6"/>
+  <ellipse cx="-5" cy="-3" rx="4" ry="4.4" fill="#1a0f2e"/><ellipse cx="5" cy="-3" rx="4" ry="4.4" fill="#1a0f2e"/>
+  <g class="skull-eyes" fill="#ff4f6d"><circle cx="-5" cy="-2.6" r="1.6"/><circle cx="5" cy="-2.6" r="1.6"/></g>
+  <path d="M0 2 L-2 6 H2 Z" fill="#1a0f2e"/>
+  <path d="M-4 9 V12 M0 9 V12 M4 9 V12" stroke="#1a0f2e" stroke-width="1.2"/>`;
+
+// Escudo heráldico con calavera y dos espadas cruzadas detrás
+const crest = (x, y, s = 1, cls = '') => `
+  <g transform="translate(${x} ${y}) scale(${s})"><g class="crest ${cls}">
+    <g transform="rotate(-38) translate(0 46)">${sword(96)}</g>
+    <g transform="rotate(38) translate(0 46)">${sword(96)}</g>
+    <path d="M-26 -30 H26 V-2 C26 18 12 30 0 38 C-12 30 -26 18 -26 -2 Z" fill="#2c1857" stroke="#ffd166" stroke-width="3"/>
+    <path d="M0 -30 H26 V-2 C26 18 12 30 0 38 Z" fill="#3d2470"/>
+    <g transform="translate(0 2) scale(1.05)">${skull}</g>
+  </g></g>`;
+
+// Pata del caballo: muslo y caña con casco; gira desde la cadera para el galope
+const leg = (x, y, cls, fill) => `
+  <g transform="translate(${x} ${y})"><g class="leg ${cls}">
+    <path d="M-5 0 L5 0 L4 16 L3 30 H-3 L-4 16 Z" fill="${fill}"/><rect x="-4.5" y="28" width="9" height="5" rx="1.5" fill="#120a24"/>
+  </g></g>`;
+
+// Caballero calavera con armadura, escudo y espada, cabalgando hacia la derecha (origen: cascos)
+const knight = `
+  <g class="knight">
+    <!-- capa ondeando detrás -->
+    <path class="cape" d="M-6 -92 C-26 -90 -44 -82 -62 -70 C-52 -66 -50 -60 -58 -52 C-40 -56 -24 -62 -10 -66 Z" fill="#9b2245"/>
+    <!-- patas del lado lejano (más oscuras) -->
+    ${leg(-30, -36, 'back-far', '#1c1036')}${leg(22, -36, 'front-far', '#1c1036')}
+    <!-- caballo: cuerpo, cola, cuello y cabeza -->
+    <path class="tail" d="M-44 -50 C-58 -50 -66 -40 -68 -24 C-60 -32 -54 -36 -46 -40 Z" fill="#1a0f2e"/>
+    <path d="M-46 -52 C-46 -64 -30 -66 -8 -64 C10 -63 24 -64 32 -58 L40 -80 C42 -90 50 -95 57 -92 L75 -76 C78 -72 76 -66 71 -66 L58 -70 L50 -54 C46 -40 36 -34 20 -34 L-30 -34 C-42 -34 -46 -42 -46 -52 Z" fill="#2a1650"/>
+    <path d="M48 -91 L50 -102 L55 -92 Z M52 -92 L56 -101 L58 -91 Z" fill="#2a1650"/>
+    <path class="tail" d="M38 -80 C40 -92 48 -96 54 -94 L46 -84 L40 -64 L34 -60 Z" fill="#1a0f2e"/>
+    <circle cx="55" cy="-86" r="2.2" fill="#ff4f6d" class="skull-eyes"/>
+    <!-- armadura del caballo (testera) y gualdrapa -->
+    <path d="M60 -87 L75 -75 L71 -70 L58 -80 Z" fill="#9aa0bd"/>
+    <path d="M-40 -60 C-20 -64 10 -64 30 -58 L26 -36 C10 -30 -20 -30 -38 -36 Z" fill="#9b2245"/>
+    <path d="M-38 -38 C-20 -32 10 -32 26 -38" fill="none" stroke="#ffd166" stroke-width="2.5"/>
+    <path d="M-30 -36 l4 6 l4 -6 M-14 -34 l4 6 l4 -6 M2 -34 l4 6 l4 -6 M18 -36 l4 6 l4 -6" fill="#ffd166"/>
+    <!-- patas del lado cercano -->
+    ${leg(-34, -38, 'back', '#2a1650')}${leg(18, -38, 'front', '#2a1650')}
+    <!-- jinete: pierna, peto, brazo y casco -->
+    <path d="M-6 -62 L6 -62 L12 -44 L6 -42 Z" fill="#9aa0bd"/>
+    <path d="M-16 -64 C-18 -78 -16 -90 -6 -94 C4 -94 10 -86 8 -64 Z" fill="#cfd3e6"/>
+    <path d="M-2 -94 C4 -94 10 -86 8 -64 H-2 Z" fill="#9aa0bd"/>
+    <path d="M-16 -76 H8" stroke="#6f7594" stroke-width="2"/>
+    <g transform="translate(-3 -106) scale(.78)">${skull}</g>
+    <path d="M-14 -110 C-14 -124 8 -126 10 -112 L10 -108 H-14 Z" fill="#9aa0bd"/>
+    <path d="M-2 -124 C-10 -136 -24 -134 -30 -126 C-20 -128 -12 -126 -6 -120 Z" fill="#ff4f6d"/>
+    <!-- brazo con la espada en alto -->
+    <g transform="translate(2 -86)"><g class="sword-arm">
+      <path d="M0 -4 L18 -12 L20 -6 L2 4 Z" fill="#cfd3e6"/>
+      <g transform="translate(19 -9) rotate(28)">${sword(46)}</g>
+    </g></g>
+    <!-- escudo -->
+    <g transform="translate(-18 -74) scale(.42)">
+      <path d="M-26 -30 H26 V-2 C26 18 12 30 0 38 C-12 30 -26 18 -26 -2 Z" fill="#3a2168" stroke="#ffd166" stroke-width="5"/>
+      <g transform="translate(0 2) scale(1.1)">${skull}</g>
+    </g>
   </g>`;
 
 // Dragón caricaturesco en silueta, mirando a la derecha
@@ -107,9 +217,14 @@ export function sceneSVG() {
     <g fill="#2f1b5c">${pine(520, 372, .7)}${pine(560, 378, .55)}${pine(980, 352, .75)}${pine(1030, 360, .6)}${pine(1110, 372, .7)}${pine(1390, 362, .65)}${pine(120, 372, .65)}${pine(300, 360, .8)}${pine(340, 366, .6)}</g>
 
     <path fill="#2a1852" d="M0 440 C160 410 300 420 460 432 C640 446 760 410 940 414 C1100 418 1260 446 1440 430 V520 H0Z"/>
+    <g class="knight-path">${knight}</g>
     <g fill="#24144a">${pine(40, 452, .9)}${pine(90, 460, .7)}${pine(1380, 448, .95)}${pine(1330, 458, .7)}${pine(760, 428, .6)}</g>
     <path fill="#1e1440" d="M0 480 C240 462 480 470 720 476 C960 482 1200 466 1440 474 V520 H0Z"/>
 
     <g fill="#ffe27a" filter="url(#glow)">${fireflies}</g>
   </svg>`;
 }
+
+// Emblema suelto (escudo con calavera y espadas cruzadas) para la sección de torneos
+export const emblemSVG = (cls = '') =>
+  `<svg class="emblem ${cls}" viewBox="-62 -66 124 132" aria-hidden="true">${crest(0, 0, 1, 'bob')}</svg>`;

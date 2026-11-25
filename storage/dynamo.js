@@ -7,6 +7,10 @@
 //   Sesión               SESSION#<token>       SESSION    ttl = caducidad automática
 //   Carta en venta       LISTING#<id>          LISTING    GSI1: USER#<id> / fecha · GSI2: LISTING / fecha
 //   Contadores           META                  COUNTERS
+//   ID Pokémon único     POKEID#<id>           UNIQUE     (un ID de jugador por cuenta)
+//   Torneo               TOURNEY#<id>          META       GSI2: TOURNEY / fecha de inicio
+//   Jugador inscrito     TOURNEY#<id>          PLAYER#<userId>   GSI1: PLAYER#<userId> / fecha
+//   Partida              TOURNEY#<id>          MATCH#<ronda>#<mesa>
 //
 // El catálogo lee las cartas por GSI2 y filtra en memoria: suficiente para QA y volúmenes pequeños.
 import { randomBytes } from 'node:crypto';
@@ -216,4 +220,143 @@ export const repo = {
       users: meta.Item?.users || 0,
     };
   },
+
+  // ---------- ID de jugador Pokémon (Play! Pokémon) ----------
+  async setPokemonId(userId, pokemonId) {
+    const user = await this.getUser(userId);
+    const old = user?.pokemon_id || '';
+    if (old === pokemonId) return user;
+    const items = [
+      { Update: { TableName: TABLE, Key: { PK: `USER#${userId}`, SK: 'PROFILE' },
+                  UpdateExpression: 'SET pokemon_id = :p', ExpressionAttributeValues: { ':p': pokemonId } } },
+    ];
+    if (pokemonId) items.push({ Put: { TableName: TABLE, Item: { PK: `POKEID#${pokemonId}`, SK: 'UNIQUE', userId },
+                                       ConditionExpression: 'attribute_not_exists(PK)' } });
+    if (old) items.push({ Delete: { TableName: TABLE, Key: { PK: `POKEID#${old}`, SK: 'UNIQUE' } } });
+    try {
+      await ddb.send(new TransactWriteCommand({ TransactItems: items }));
+    } catch (err) {
+      if (err.name === 'TransactionCanceledException') { const e = new Error('duplicate'); e.code = 'DUPLICATE'; throw e; }
+      throw err;
+    }
+    return this.getUser(userId);
+  },
+
+  // ---------- Torneos ----------
+  async createTournament(organizerId, t) {
+    const id = newId();
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: {
+      PK: `TOURNEY#${id}`, SK: 'META', type: 'tournament', GSI2PK: 'TOURNEY', GSI2SK: t.starts_at,
+      id, organizer_id: organizerId, ...t, status: 'registration', current_round: 0, player_count: 0, created_at: now(),
+    } }));
+    return this.getTournament(id);
+  },
+
+  async getTournament(id) {
+    const out = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' } }));
+    if (!out.Item) return null;
+    return (await withOrganizers([strip(out.Item)]))[0];
+  },
+
+  async listTournaments() {
+    const items = await queryAll({ TableName: TABLE, IndexName: 'GSI2', KeyConditionExpression: 'GSI2PK = :p',
+      ExpressionAttributeValues: { ':p': 'TOURNEY' }, ScanIndexForward: false });
+    return withOrganizers(items.map(strip).slice(0, 200));
+  },
+
+  async updateTournament(id, { status, current_round }) {
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' },
+      UpdateExpression: 'SET #s = :s, current_round = :r', ExpressionAttributeNames: { '#s': 'status' },
+      ExpressionAttributeValues: { ':s': status, ':r': current_round }, ConditionExpression: 'attribute_exists(PK)',
+    }));
+    return this.getTournament(id);
+  },
+
+  async deleteTournament(id) {
+    const items = await queryAll({ TableName: TABLE, KeyConditionExpression: 'PK = :p',
+      ExpressionAttributeValues: { ':p': `TOURNEY#${id}` }, ProjectionExpression: 'PK, SK' });
+    await Promise.all(items.map(k => ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: k.PK, SK: k.SK } }))));
+  },
+
+  async getTournamentPlayers(id) {
+    const items = await queryAll({ TableName: TABLE, KeyConditionExpression: 'PK = :p AND begins_with(SK, :s)',
+      ExpressionAttributeValues: { ':p': `TOURNEY#${id}`, ':s': 'PLAYER#' } });
+    const users = await getUsers(items.map(i => i.user_id));
+    return items
+      .map(i => {
+        const u = users.get(i.user_id) || {};
+        return { user_id: i.user_id, joined_at: i.joined_at, username: u.username, display_name: u.display_name,
+                 location: u.location, pokemon_id: u.pokemon_id || '' };
+      })
+      .sort((a, b) => a.joined_at.localeCompare(b.joined_at));
+  },
+
+  async joinTournament(id, userId) {
+    const joined = now();
+    try {
+      await ddb.send(new TransactWriteCommand({ TransactItems: [
+        { Put: { TableName: TABLE, ConditionExpression: 'attribute_not_exists(PK)', Item: {
+          PK: `TOURNEY#${id}`, SK: `PLAYER#${userId}`, type: 'player', GSI1PK: `PLAYER#${userId}`, GSI1SK: joined,
+          tournament_id: id, user_id: userId, joined_at: joined } } },
+        { Update: { TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' }, UpdateExpression: 'ADD player_count :one',
+                    ExpressionAttributeValues: { ':one': 1 } } },
+      ] }));
+    } catch (err) {
+      if (err.name !== 'TransactionCanceledException') throw err; // ya estaba inscrito
+    }
+  },
+
+  async leaveTournament(id, userId) {
+    try {
+      await ddb.send(new TransactWriteCommand({ TransactItems: [
+        { Delete: { TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: `PLAYER#${userId}` }, ConditionExpression: 'attribute_exists(PK)' } },
+        { Update: { TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' }, UpdateExpression: 'ADD player_count :m',
+                    ExpressionAttributeValues: { ':m': -1 } } },
+      ] }));
+    } catch (err) {
+      if (err.name !== 'TransactionCanceledException') throw err; // no estaba inscrito
+    }
+  },
+
+  async getMatches(id) {
+    const items = await queryAll({ TableName: TABLE, KeyConditionExpression: 'PK = :p AND begins_with(SK, :s)',
+      ExpressionAttributeValues: { ':p': `TOURNEY#${id}`, ':s': 'MATCH#' } });
+    return items.map(strip).map(m => ({ ...m, player2_id: m.player2_id ?? null, result: m.result ?? null }))
+      .sort((a, b) => a.round - b.round || a.table_no - b.table_no);
+  },
+
+  async addMatches(id, matches) {
+    await Promise.all(matches.map(m => ddb.send(new PutCommand({ TableName: TABLE, Item: {
+      PK: `TOURNEY#${id}`, SK: matchSK(m.round, m.table_no), type: 'match',
+      tournament_id: id, round: m.round, table_no: m.table_no,
+      player1_id: m.player1_id, player2_id: m.player2_id ?? undefined, result: m.result ?? undefined,
+    } }))));
+  },
+
+  async setMatchResult(id, round, tableNo, result) {
+    const key = { PK: `TOURNEY#${id}`, SK: matchSK(round, tableNo) };
+    await ddb.send(new UpdateCommand(result
+      ? { TableName: TABLE, Key: key, UpdateExpression: 'SET #r = :r', ExpressionAttributeNames: { '#r': 'result' },
+          ExpressionAttributeValues: { ':r': result }, ConditionExpression: 'attribute_exists(PK)' }
+      : { TableName: TABLE, Key: key, UpdateExpression: 'REMOVE #r', ExpressionAttributeNames: { '#r': 'result' },
+          ConditionExpression: 'attribute_exists(PK)' }));
+  },
+
+  async listUserTournamentIds(userId) {
+    const items = await queryAll({ TableName: TABLE, IndexName: 'GSI1', KeyConditionExpression: 'GSI1PK = :p',
+      ExpressionAttributeValues: { ':p': `PLAYER#${userId}` } });
+    return items.map(i => i.tournament_id);
+  },
 };
+
+const matchSK = (round, table) => `MATCH#${String(round).padStart(3, '0')}#${String(table).padStart(4, '0')}`;
+
+// Añade a cada torneo el usuario y nombre de quien lo organiza
+async function withOrganizers(list) {
+  const users = await getUsers(list.map(t => t.organizer_id));
+  return list.map(t => {
+    const u = users.get(t.organizer_id) || {};
+    return { ...t, player_count: t.player_count || 0, organizer_username: u.username, organizer_name: u.display_name };
+  });
+}

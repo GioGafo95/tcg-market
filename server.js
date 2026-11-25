@@ -3,6 +3,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { repo, STORAGE, putFile, deleteFile, publicUrl, uploadsHandler } from './storage/index.js';
 import { searchCards, getCardByRef, cacheRefImage } from './cards.js';
 import { getUsdMxn, toMxn } from './fx.js';
+import { outcome, opponentOf, standings, pairRound, streaks } from './tournaments.js';
 
 const fxInfo = fx => (fx ? { rate: Math.round(fx.rate * 10000) / 10000, date: fx.date, source: fx.source } : null);
 
@@ -63,6 +64,8 @@ const publicUser = u => u && ({
   first_name: u.first_name || '', last_name: u.last_name || '',
   location: u.location, contact: u.contact, created_at: u.created_at,
 });
+// Datos que solo ve el propio usuario (incluye su ID de jugador Pokémon)
+const meUser = u => u && ({ ...publicUser(u), pokemon_id: u.pokemon_id || '' });
 
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const sameId = (a, b) => String(a) === String(b);
@@ -146,7 +149,7 @@ app.post('/api/auth/register', async (req, res) => {
     throw err;
   }
   await createSession(res, user.id);
-  res.status(201).json({ user: publicUser(user) });
+  res.status(201).json({ user: meUser(user) });
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -156,7 +159,7 @@ app.post('/api/auth/login', async (req, res) => {
   if (!user || !verifyPassword(password, user.password_hash))
     throw new HttpError(401, 'Usuario o contraseña incorrectos.');
   await createSession(res, user.id);
-  res.json({ user: publicUser(user) });
+  res.json({ user: meUser(user) });
 });
 
 app.post('/api/auth/logout', async (req, res) => {
@@ -165,11 +168,11 @@ app.post('/api/auth/logout', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/auth/me', (req, res) => res.json({ user: publicUser(req.user) || null }));
+app.get('/api/auth/me', (req, res) => res.json({ user: meUser(req.user) || null }));
 
 app.put('/api/auth/me', requireAuth, async (req, res) => {
   const user = await repo.updateUser(req.user.id, validateProfile(req.body));
-  res.json({ user: publicUser(user) });
+  res.json({ user: meUser(user) });
 });
 
 // ---------- Búsqueda de cartas y precio estimado ----------
@@ -330,6 +333,183 @@ app.delete('/api/listings/:id', requireAuth, async (req, res) => {
   const existing = await ownListing(req);
   await repo.deleteListing(existing.id);
   await Promise.all((existing.photos || []).map(p => deleteFile(photoKey(p.filename))));
+  res.json({ ok: true });
+});
+
+// ---------- ID de jugador Pokémon y torneos locales ----------
+
+// ID de jugador de Play! Pokémon: solo dígitos. Vacío = desvincular.
+app.put('/api/auth/me/pokemon-id', requireAuth, async (req, res) => {
+  const pokemonId = str(req.body.pokemon_id, 20).replace(/\s+/g, '');
+  if (pokemonId && !/^\d{4,10}$/.test(pokemonId))
+    throw new HttpError(400, 'El ID de jugador Pokémon debe tener de 4 a 10 dígitos.');
+  try {
+    const user = await repo.setPokemonId(req.user.id, pokemonId);
+    res.json({ user: meUser(user) });
+  } catch (err) {
+    if (err.code === 'DUPLICATE') throw new HttpError(409, 'Ese ID de jugador ya está vinculado a otra cuenta.');
+    throw err;
+  }
+});
+
+function validateTournament(body) {
+  const name = str(body.name, 80).replace(/\s+/g, ' ');
+  const location = str(body.location, 80);
+  const starts_at = str(body.starts_at, 16);
+  const rounds = body.rounds === '' || body.rounds === undefined ? 0 : Number(body.rounds);
+  if (name.length < 3) throw new HttpError(400, 'El nombre del torneo debe tener al menos 3 caracteres.');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(starts_at) || Number.isNaN(Date.parse(starts_at)))
+    throw new HttpError(400, 'Indica la fecha y hora del torneo.');
+  if (!Number.isInteger(rounds) || rounds < 0 || rounds > 15) throw new HttpError(400, 'Las rondas deben ser de 0 a 15 (0 = sin límite).');
+  return { name, location, starts_at, rounds };
+}
+
+const lite = p => p && { user_id: p.user_id, username: p.username, display_name: p.display_name };
+
+async function loadTournament(id) {
+  const t = await repo.getTournament(str(id, 40));
+  if (!t) throw new HttpError(404, 'Torneo no encontrado.');
+  const [players, matches] = await Promise.all([repo.getTournamentPlayers(t.id), repo.getMatches(t.id)]);
+  return { t, players, matches, table: standings(players, matches) };
+}
+
+const isOrganizer = (t, user) => user && sameId(t.organizer_id, user.id);
+
+// Partida de la ronda en curso para un jugador, con su rival y el récord de ambos
+function currentMatch({ t, players, matches, table }, userId) {
+  if (t.status !== 'running') return null;
+  const m = matches.find(x => x.round === t.current_round && opponentOf(x, userId) !== undefined);
+  if (!m) return null;
+  const oppId = opponentOf(m, userId);
+  const rec = id => { const r = table.find(x => sameId(x.user_id, id)); return r && { wins: r.wins, losses: r.losses, ties: r.ties, place: r.place }; };
+  return {
+    round: m.round, table_no: m.table_no, bye: oppId == null, result: outcome(m, userId),
+    opponent: oppId == null ? null : { ...lite(players.find(p => sameId(p.user_id, oppId))), record: rec(oppId) },
+    my_record: rec(userId),
+  };
+}
+
+// Resultados del jugador en un torneo, en orden de rondas
+const resultsIn = (matches, userId) => matches.map(m => outcome(m, userId)).filter(Boolean);
+
+app.get('/api/tournaments', async (_req, res) => {
+  res.json({ tournaments: await repo.listTournaments() });
+});
+
+// Panel personal: ID vinculado, partidas en curso, historial y rachas en todos los torneos
+app.get('/api/tournaments/me', requireAuth, async (req, res) => {
+  const ids = await repo.listUserTournamentIds(req.user.id);
+  const loaded = (await Promise.all(ids.map(id => loadTournament(String(id)).catch(() => null)))).filter(Boolean);
+  loaded.sort((a, b) => a.t.starts_at.localeCompare(b.t.starts_at));
+
+  const all = [];
+  const history = loaded.map(L => {
+    const results = resultsIn(L.matches, req.user.id);
+    all.push(...results);
+    const row = L.table.find(r => sameId(r.user_id, req.user.id));
+    return { id: L.t.id, name: L.t.name, location: L.t.location, starts_at: L.t.starts_at, status: L.t.status,
+             player_count: L.players.length, place: row?.place ?? null, ...streaks(results) };
+  }).reverse();
+
+  const active = loaded.map(L => {
+    const cm = currentMatch(L, req.user.id);
+    return cm && { tournament: { id: L.t.id, name: L.t.name, location: L.t.location }, ...cm };
+  }).filter(Boolean);
+
+  res.json({ pokemon_id: req.user.pokemon_id || '', overall: streaks(all), active, history });
+});
+
+app.post('/api/tournaments', requireAuth, async (req, res) => {
+  const t = await repo.createTournament(req.user.id, validateTournament(req.body));
+  res.status(201).json({ tournament: t });
+});
+
+app.get('/api/tournaments/:id', async (req, res) => {
+  const L = await loadTournament(req.params.id);
+  const { t, players, matches, table } = L;
+  const manage = isOrganizer(t, req.user);
+  const byId = new Map(players.map(p => [String(p.user_id), lite(p)]));
+  const rounds = [];
+  for (const m of matches) {
+    (rounds[m.round - 1] ??= { round: m.round, matches: [] }).matches.push({
+      table_no: m.table_no, result: m.result, bye: m.player2_id == null,
+      player1: byId.get(String(m.player1_id)) || null, player2: m.player2_id == null ? null : byId.get(String(m.player2_id)) || null,
+    });
+  }
+  const joined = !!req.user && players.some(p => sameId(p.user_id, req.user.id));
+  res.json({
+    tournament: { ...t, player_count: players.length },
+    can_manage: manage,
+    // El ID de jugador solo lo ve quien organiza (para capturarlo en el reporte oficial)
+    players: players.map(p => ({ ...lite(p), location: p.location, ...(manage ? { pokemon_id: p.pokemon_id } : {}) })),
+    standings: table.map(({ opponents, ...r }) => r),
+    rounds: rounds.filter(Boolean),
+    round_complete: matches.filter(m => m.round === t.current_round).every(m => m.result),
+    me: joined ? { joined, match: currentMatch(L, req.user.id), ...streaks(resultsIn(matches, req.user.id)) } : { joined: false },
+  });
+});
+
+async function managedTournament(req) {
+  const L = await loadTournament(req.params.id);
+  if (!isOrganizer(L.t, req.user)) throw new HttpError(403, 'Solo quien organiza el torneo puede hacer esto.');
+  return L;
+}
+
+app.post('/api/tournaments/:id/join', requireAuth, async (req, res) => {
+  const t = await repo.getTournament(str(req.params.id, 40));
+  if (!t) throw new HttpError(404, 'Torneo no encontrado.');
+  if (t.status !== 'registration') throw new HttpError(400, 'Las inscripciones de este torneo ya cerraron.');
+  if (!req.user.pokemon_id) throw new HttpError(400, 'Vincula tu ID de jugador Pokémon antes de inscribirte.');
+  await repo.joinTournament(t.id, req.user.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/tournaments/:id/leave', requireAuth, async (req, res) => {
+  const t = await repo.getTournament(str(req.params.id, 40));
+  if (!t) throw new HttpError(404, 'Torneo no encontrado.');
+  if (t.status !== 'registration') throw new HttpError(400, 'El torneo ya empezó; habla con quien lo organiza.');
+  await repo.leaveTournament(t.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// Genera la siguiente ronda (la primera cierra las inscripciones)
+app.post('/api/tournaments/:id/rounds', requireAuth, async (req, res) => {
+  const { t, players, matches } = await managedTournament(req);
+  if (t.status === 'finished') throw new HttpError(400, 'El torneo ya terminó.');
+  if (players.length < 2) throw new HttpError(400, 'Se necesitan al menos 2 jugadores inscritos.');
+  if (matches.some(m => m.round === t.current_round && !m.result))
+    throw new HttpError(400, 'Faltan resultados de la ronda actual.');
+  if (t.rounds && t.current_round >= t.rounds) throw new HttpError(400, 'Ya se jugaron todas las rondas; finaliza el torneo.');
+  const round = t.current_round + 1;
+  await repo.addMatches(t.id, pairRound(players, matches, round));
+  await repo.updateTournament(t.id, { status: 'running', current_round: round });
+  res.status(201).json({ ok: true, round });
+});
+
+app.put('/api/tournaments/:id/matches/:round/:table', requireAuth, async (req, res) => {
+  const { t, matches } = await managedTournament(req);
+  const round = Number(req.params.round), table = Number(req.params.table);
+  const m = matches.find(x => x.round === round && x.table_no === table);
+  if (!m) throw new HttpError(404, 'Partida no encontrada.');
+  if (t.status !== 'running' || round !== t.current_round) throw new HttpError(400, 'Solo se pueden capturar resultados de la ronda en curso.');
+  if (m.player2_id == null) throw new HttpError(400, 'Un bye no lleva resultado.');
+  const result = ['p1', 'p2', 'tie'].includes(req.body.result) ? req.body.result : null;
+  await repo.setMatchResult(t.id, round, table, result);
+  res.json({ ok: true });
+});
+
+app.post('/api/tournaments/:id/finish', requireAuth, async (req, res) => {
+  const { t, matches } = await managedTournament(req);
+  if (t.status !== 'running') throw new HttpError(400, 'El torneo no está en curso.');
+  if (matches.some(m => m.round === t.current_round && !m.result)) throw new HttpError(400, 'Faltan resultados de la ronda actual.');
+  await repo.updateTournament(t.id, { status: 'finished', current_round: t.current_round });
+  res.json({ ok: true });
+});
+
+app.delete('/api/tournaments/:id', requireAuth, async (req, res) => {
+  const { t } = await managedTournament(req);
+  if (t.status !== 'registration') throw new HttpError(400, 'Solo se puede borrar un torneo que no ha empezado.');
+  await repo.deleteTournament(t.id);
   res.json({ ok: true });
 });
 

@@ -55,13 +55,45 @@ db.exec(`
     position   INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS idx_photos_listing ON listing_photos(listing_id);
+
+  CREATE TABLE IF NOT EXISTS tournaments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    organizer_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    location      TEXT DEFAULT '',
+    starts_at     TEXT NOT NULL,
+    rounds        INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'registration' CHECK (status IN ('registration', 'running', 'finished')),
+    current_round INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS tournament_players (
+    tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    joined_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (tournament_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_tplayers_user ON tournament_players(user_id);
+
+  -- Partidas por ronda. player2_id NULL = bye. result: p1 | p2 | tie | NULL (pendiente)
+  CREATE TABLE IF NOT EXISTS matches (
+    tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+    round         INTEGER NOT NULL,
+    table_no      INTEGER NOT NULL,
+    player1_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    player2_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    result        TEXT CHECK (result IN ('p1', 'p2', 'tie')),
+    PRIMARY KEY (tournament_id, round, table_no)
+  );
 `);
 
 // Migraciones de columnas añadidas después de la primera versión
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const name of ['first_name', 'last_name']) {
+for (const name of ['first_name', 'last_name', 'pokemon_id']) {
   if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} TEXT DEFAULT ''`);
 }
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_pokemon_id ON users(pokemon_id) WHERE pokemon_id <> ''");
 const cols = db.prepare('PRAGMA table_info(listings)').all().map(c => c.name);
 for (const [name, def] of Object.entries({
   ref_id: "TEXT DEFAULT ''", market_price: 'REAL', market_source: "TEXT DEFAULT ''", market_updated: 'TEXT',
@@ -172,5 +204,75 @@ export const repo = {
     const sellers = db.prepare(`SELECT COUNT(DISTINCT user_id) AS n FROM listings WHERE status = 'available' AND quantity > 0`).get().n;
     const users = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
     return { byGame, sellers, users };
+  },
+
+  // ---------- ID de jugador Pokémon (Play! Pokémon) ----------
+  async setPokemonId(userId, pokemonId) {
+    const taken = pokemonId && db.prepare('SELECT 1 FROM users WHERE pokemon_id = ? AND id <> ?').get(pokemonId, userId);
+    if (taken) { const e = new Error('duplicate'); e.code = 'DUPLICATE'; throw e; }
+    db.prepare('UPDATE users SET pokemon_id = ? WHERE id = ?').run(pokemonId, userId);
+    return this.getUser(userId);
+  },
+
+  // ---------- Torneos ----------
+  async createTournament(organizerId, t) {
+    const { lastInsertRowid } = db.prepare(`INSERT INTO tournaments (organizer_id, name, location, starts_at, rounds)
+      VALUES (?, ?, ?, ?, ?)`).run(organizerId, t.name, t.location, t.starts_at, t.rounds);
+    return this.getTournament(lastInsertRowid);
+  },
+
+  async getTournament(id) {
+    const t = db.prepare(`SELECT t.*, u.username AS organizer_username, u.display_name AS organizer_name,
+      (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) AS player_count
+      FROM tournaments t JOIN users u ON u.id = t.organizer_id WHERE t.id = ?`).get(Number(id));
+    return t ? { ...t, created_at: iso(t.created_at) } : null;
+  },
+
+  async listTournaments() {
+    return db.prepare(`SELECT t.*, u.username AS organizer_username, u.display_name AS organizer_name,
+      (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) AS player_count
+      FROM tournaments t JOIN users u ON u.id = t.organizer_id ORDER BY t.starts_at DESC LIMIT 200`).all()
+      .map(t => ({ ...t, created_at: iso(t.created_at) }));
+  },
+
+  async updateTournament(id, { status, current_round }) {
+    db.prepare('UPDATE tournaments SET status = ?, current_round = ? WHERE id = ?').run(status, current_round, Number(id));
+    return this.getTournament(id);
+  },
+
+  async deleteTournament(id) { db.prepare('DELETE FROM tournaments WHERE id = ?').run(Number(id)); },
+
+  async getTournamentPlayers(id) {
+    return db.prepare(`SELECT p.user_id, p.joined_at, u.username, u.display_name, u.location, u.pokemon_id
+      FROM tournament_players p JOIN users u ON u.id = p.user_id WHERE p.tournament_id = ? ORDER BY p.joined_at, p.user_id`)
+      .all(Number(id)).map(p => ({ ...p, joined_at: iso(p.joined_at) }));
+  },
+
+  async joinTournament(id, userId) {
+    db.prepare('INSERT OR IGNORE INTO tournament_players (tournament_id, user_id) VALUES (?, ?)').run(Number(id), userId);
+  },
+
+  async leaveTournament(id, userId) {
+    db.prepare('DELETE FROM tournament_players WHERE tournament_id = ? AND user_id = ?').run(Number(id), userId);
+  },
+
+  async getMatches(id) {
+    return db.prepare('SELECT * FROM matches WHERE tournament_id = ? ORDER BY round, table_no').all(Number(id));
+  },
+
+  async addMatches(id, matches) {
+    const ins = db.prepare(`INSERT INTO matches (tournament_id, round, table_no, player1_id, player2_id, result)
+      VALUES (?, ?, ?, ?, ?, ?)`);
+    for (const m of matches) ins.run(Number(id), m.round, m.table_no, m.player1_id, m.player2_id ?? null, m.result ?? null);
+  },
+
+  async setMatchResult(id, round, tableNo, result) {
+    db.prepare('UPDATE matches SET result = ? WHERE tournament_id = ? AND round = ? AND table_no = ?')
+      .run(result, Number(id), round, tableNo);
+  },
+
+  // Torneos en los que participa un usuario (para su historial y su partida actual)
+  async listUserTournamentIds(userId) {
+    return db.prepare('SELECT tournament_id FROM tournament_players WHERE user_id = ?').all(userId).map(r => r.tournament_id);
   },
 };

@@ -1,5 +1,5 @@
 // TCG Market — SPA en JavaScript puro con rutas por hash (#/...)
-import { sceneSVG } from './scene.js';
+import { sceneSVG, emblemSVG } from './scene.js';
 
 // Efecto holográfico: la carta se inclina en 3D y el brillo sigue al ratón
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -97,16 +97,18 @@ const formData = (form) => Object.fromEntries(new FormData(form).entries());
 
 function renderNav() {
   $nav.innerHTML = currentUser
-    ? `<a class="btn primary small" href="#/vender">+ Vender carta</a>
+    ? `<a class="btn small" href="#/torneos">⚔ Torneos</a>
+       <a class="btn primary small" href="#/vender">+ Vender carta</a>
        <a class="btn small" href="#/mis-cartas">Mis cartas</a>
        <a class="btn small" href="#/perfil">Mi perfil</a>
        <span class="nav-user">@${esc(currentUser.username)}</span>
        <button class="btn small" id="logout">Salir</button>`
-    : `<a class="btn small" href="#/login">Iniciar sesión</a>
+    : `<a class="btn small" href="#/torneos">⚔ Torneos</a>
+       <a class="btn small" href="#/login">Iniciar sesión</a>
        <a class="btn primary small" href="#/registro">Crear cuenta</a>`;
   document.getElementById('logout')?.addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
-    currentUser = null; renderNav(); toast('Sesión cerrada'); go('#/');
+    currentUser = null; renderNav(); refreshMatchBanner(); toast('Sesión cerrada'); go('#/');
   });
 }
 
@@ -611,7 +613,13 @@ function viewProfile() {
         <div class="error" id="err"></div>
         <button class="btn primary">Guardar</button>
       </form>
+    </div>
+    <div class="panel auth">
+      <h2>⚔ Torneos</h2>
+      <p class="muted">Tu ID de jugador solo lo ven quienes organizan los torneos en los que te inscribes. <a href="#/torneos">Ir a torneos</a></p>
+      ${pokemonIdForm(u.pokemon_id || '')}
     </div>`;
+  bindPokemonIdForm(viewProfile);
   const f = document.getElementById('f');
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -620,6 +628,295 @@ function viewProfile() {
       renderNav(); toast('Perfil actualizado');
     } catch (err) { document.getElementById('err').textContent = err.message; }
   });
+}
+
+// ---------- Torneos ----------
+
+const T_STATUS = { registration: 'Inscripciones abiertas', running: 'En curso', finished: 'Terminado' };
+const RES_LABEL = { W: 'V', L: 'D', T: 'E' };
+const fmtDate = (s) => new Date(s).toLocaleString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const record = (r) => (r ? `${r.wins}-${r.losses}-${r.ties}` : '0-0-0');
+const pills = (last = []) => `<span class="pills">${last.map(r => `<span class="pill ${r}">${RES_LABEL[r]}</span>`).join('')}</span>`;
+
+function streakText(s) {
+  if (!s?.current) return 'Sin partidas todavía';
+  const n = s.current.count;
+  return { W: `🔥 ${n} ${n === 1 ? 'victoria' : 'victorias seguidas'}`,
+           L: `💀 ${n} ${n === 1 ? 'derrota' : 'derrotas seguidas'}`,
+           T: `🤝 ${n} ${n === 1 ? 'empate' : 'empates seguidos'}` }[s.current.type];
+}
+
+// Tarjeta "contra quién vas" de la ronda en curso
+function vsCard(m, tournament) {
+  const head = `${tournament ? `<a href="#/torneo/${tournament.id}">${esc(tournament.name)}</a> · ` : ''}Ronda ${m.round}`;
+  if (m.bye) return `
+    <div class="vs-card">
+      <div class="vs-head">${head}</div>
+      <div class="vs-bye">Tienes <b>bye</b> esta ronda: cuenta como victoria. ¡Descansa, guerrero!</div>
+    </div>`;
+  const done = m.result ? `<div class="vs-result ${m.result}">${{ W: 'Ganaste', L: 'Perdiste', T: 'Empate' }[m.result]}</div>` : '';
+  return `
+    <div class="vs-card">
+      <div class="vs-head">${head} · <b>Mesa ${m.table_no}</b></div>
+      <div class="vs-body">
+        <div class="vs-player me"><span class="muted">Tú</span><b>${esc(currentUser.display_name)}</b><span>${record(m.my_record)}</span></div>
+        <div class="vs-sword">⚔</div>
+        <div class="vs-player"><span class="muted">Rival</span>
+          <b>${esc(m.opponent?.display_name || '—')}</b>
+          <span>@${esc(m.opponent?.username || '')} · ${record(m.opponent?.record)}${m.opponent?.record ? ` · ${m.opponent.record.place}º` : ''}</span></div>
+      </div>
+      ${done}
+    </div>`;
+}
+
+// Aviso fijo bajo la cabecera cuando tienes una partida en curso
+async function refreshMatchBanner() {
+  const $b = document.getElementById('matchBanner');
+  if (!currentUser) { $b.hidden = true; return; }
+  try {
+    const { active } = await api('/api/tournaments/me');
+    const pending = active.filter(m => !m.result);
+    $b.hidden = !pending.length || location.hash.startsWith('#/torneo');
+    $b.innerHTML = pending.map(m => `<a href="#/torneo/${m.tournament.id}">⚔ <b>${esc(m.tournament.name)}</b> · Ronda ${m.round}: ${
+      m.bye ? 'tienes bye' : `mesa ${m.table_no} contra <b>${esc(m.opponent?.display_name)}</b> (${record(m.opponent?.record)})`}</a>`).join('');
+  } catch { $b.hidden = true; }
+}
+
+function pokemonIdForm(id) {
+  return `
+    <form id="pidForm" class="pid-form">
+      <label for="pid">ID de jugador Pokémon (Play! Pokémon)</label>
+      <div class="pid-row">
+        <input id="pid" name="pokemon_id" inputmode="numeric" pattern="[0-9]{4,10}" maxlength="10" placeholder="ej. 1234567" value="${esc(id)}">
+        <button class="btn primary">${id ? 'Actualizar' : 'Vincular'}</button>
+        ${id ? '<button type="button" class="btn" id="pidUnlink">Desvincular</button>' : ''}
+      </div>
+      <div class="card-meta">Es el número de tu Play! Pokémon ID (aparece en tu cuenta del Club de Entrenadores Pokémon). Lo necesitas para inscribirte en torneos.</div>
+      <div class="error" id="pidErr"></div>
+    </form>`;
+}
+
+function bindPokemonIdForm(after) {
+  const f = document.getElementById('pidForm');
+  if (!f) return;
+  const save = async (value) => {
+    try {
+      ({ user: currentUser } = await api('/api/auth/me/pokemon-id', { method: 'PUT', body: { pokemon_id: value } }));
+      toast(value ? 'ID de jugador vinculado' : 'ID de jugador desvinculado'); after();
+    } catch (err) { document.getElementById('pidErr').textContent = err.message; }
+  };
+  f.addEventListener('submit', e => { e.preventDefault(); save(f.pokemon_id.value.trim()); });
+  document.getElementById('pidUnlink')?.addEventListener('click', () => save(''));
+}
+
+function tournamentTile(t) {
+  return `
+    <a class="t-tile" href="#/torneo/${t.id}">
+      <span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status === 'running' ? ` · ronda ${t.current_round}` : ''}</span>
+      <div class="card-name">${esc(t.name)}</div>
+      <div class="card-meta">📅 ${fmtDate(t.starts_at)}</div>
+      ${t.location ? `<div class="card-meta">📍 ${esc(t.location)}</div>` : ''}
+      <div class="card-meta">👥 ${t.player_count} jugador(es)${t.rounds ? ` · ${t.rounds} rondas` : ''} · organiza @${esc(t.organizer_username)}</div>
+    </a>`;
+}
+
+async function viewTournaments() {
+  const [{ tournaments }, me] = await Promise.all([
+    api('/api/tournaments'), currentUser ? api('/api/tournaments/me') : Promise.resolve(null),
+  ]);
+  const group = (st) => tournaments.filter(t => t.status === st);
+  const section = (title, list, empty) => `
+    <h2>${title}</h2>
+    ${list.length ? `<div class="t-grid">${list.map(tournamentTile).join('')}</div>` : `<p class="muted">${empty}</p>`}`;
+  const o = me?.overall;
+
+  $app.innerHTML = `
+    <div class="t-hero">
+      ${emblemSVG()}
+      <div>
+        <span class="kicker">⚔ Torneos locales Pokémon ⚔</span>
+        <h1>La arena del reino</h1>
+        <p class="muted">Vincula tu ID de jugador, inscríbete en torneos de tu zona y entérate al instante de contra quién juegas cada ronda.</p>
+      </div>
+      ${currentUser ? '<a class="btn primary" href="#/torneos/nuevo">+ Organizar torneo</a>' : ''}
+    </div>
+
+    ${me ? `
+      <div class="panel player-card">
+        <div class="player-top">
+          <div>
+            <h2>Mi ficha de jugador</h2>
+            <p class="muted">${me.pokemon_id ? `ID vinculado: <b>${esc(me.pokemon_id)}</b>` : 'Aún no vinculas tu ID de jugador.'}</p>
+          </div>
+          <div class="stat-row">
+            <div class="tstat win"><b>${o.wins}</b><span>Victorias</span></div>
+            <div class="tstat loss"><b>${o.losses}</b><span>Derrotas</span></div>
+            <div class="tstat"><b>${o.ties}</b><span>Empates</span></div>
+            <div class="tstat"><b>${o.best_win_streak}</b><span>Mejor racha</span></div>
+          </div>
+        </div>
+        <p class="streak-line"><b>Racha actual:</b> ${streakText(o)} ${pills(o.last)}</p>
+        ${pokemonIdForm(me.pokemon_id)}
+      </div>
+      ${me.active.length ? `<h2>⚔ Tus partidas ahora</h2><div class="vs-list">${me.active.map(m => vsCard(m, m.tournament)).join('')}</div>` : ''}
+      ${me.history.length ? `
+        <h2>Mi historial</h2>
+        <div class="panel" style="overflow-x:auto">
+          <table class="mine"><thead><tr><th>Torneo</th><th>Fecha</th><th>Estado</th><th>Récord</th><th>Lugar</th><th>Últimas</th></tr></thead>
+          <tbody>${me.history.map(h => `<tr>
+            <td><a href="#/torneo/${h.id}">${esc(h.name)}</a></td><td>${fmtDate(h.starts_at)}</td>
+            <td><span class="badge t-${h.status}">${T_STATUS[h.status]}</span></td>
+            <td><b>${record(h)}</b></td><td>${h.place && h.status !== 'registration' ? `${h.place}º de ${h.player_count}` : '—'}</td>
+            <td>${pills(h.last)}</td></tr>`).join('')}</tbody></table>
+        </div>` : ''}`
+    : `<div class="empty"><a href="#/login">Inicia sesión</a> o <a href="#/registro">crea una cuenta</a> para vincular tu ID de jugador y entrar a torneos.</div>`}
+
+    ${section('En curso', group('running'), 'No hay torneos en curso.')}
+    ${section('Próximos', [...group('registration')].reverse(), 'No hay torneos con inscripciones abiertas.')}
+    ${section('Terminados', group('finished'), 'Aún no hay torneos terminados.')}`;
+
+  bindPokemonIdForm(viewTournaments);
+}
+
+function viewTournamentForm() {
+  if (!requireLogin()) return;
+  $app.innerHTML = `
+    <p><a href="#/torneos">← Torneos</a></p>
+    <div class="panel auth">
+      <h1>Organizar torneo</h1>
+      <p class="muted">Crea el torneo, comparte el enlace con los jugadores y genera las rondas el día del evento.</p>
+      <form id="f">
+        <div class="field"><label>Nombre</label><input name="name" required minlength="3" maxlength="80" placeholder="ej. Liga de la Tienda · Noviembre"></div>
+        <div class="field"><label>Lugar</label><input name="location" maxlength="80" placeholder="ej. Tienda Dragón, Col. Roma"></div>
+        <div class="row">
+          <div class="field"><label>Fecha y hora</label><input name="starts_at" type="datetime-local" required></div>
+          <div class="field"><label>Rondas (0 = libre)</label><input name="rounds" type="number" min="0" max="15" value="0"></div>
+        </div>
+        <div class="error" id="err"></div>
+        <button class="btn primary">Crear torneo</button>
+      </form>
+    </div>`;
+  const f = document.getElementById('f');
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const { tournament } = await api('/api/tournaments', { method: 'POST', body: formData(f) });
+      toast('¡Torneo creado!'); go(`#/torneo/${tournament.id}`);
+    } catch (err) { document.getElementById('err').textContent = err.message; }
+  });
+}
+
+async function viewTournament(id) {
+  const d = await api(`/api/tournaments/${id}`);
+  const t = d.tournament, me = d.me;
+  const nameOf = (p) => (p ? `${esc(p.display_name)} <span class="muted">@${esc(p.username)}</span>` : '—');
+  const resultCell = (m, round) => {
+    if (m.bye) return '<span class="badge cond">Bye</span>';
+    if (d.can_manage && t.status === 'running' && round === t.current_round) {
+      return `<select data-res="${round}/${m.table_no}">
+        ${[['', 'Pendiente'], ['p1', `Gana ${m.player1.display_name}`], ['p2', `Gana ${m.player2.display_name}`], ['tie', 'Empate']]
+          .map(([v, txt]) => `<option value="${v}" ${(m.result || '') === v ? 'selected' : ''}>${esc(txt)}</option>`).join('')}
+      </select>`;
+    }
+    if (!m.result) return '<span class="muted">En juego</span>';
+    return m.result === 'tie' ? 'Empate' : `Gana ${esc((m.result === 'p1' ? m.player1 : m.player2)?.display_name)}`;
+  };
+
+  $app.innerHTML = `
+    <p><a href="#/torneos">← Torneos</a></p>
+    <div class="t-hero">
+      ${emblemSVG()}
+      <div>
+        <span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status !== 'registration' ? ` · ronda ${t.current_round}${t.rounds ? ` de ${t.rounds}` : ''}` : ''}</span>
+        <h1>${esc(t.name)}</h1>
+        <p class="muted">📅 ${fmtDate(t.starts_at)}${t.location ? ` · 📍 ${esc(t.location)}` : ''} · 👥 ${t.player_count} jugador(es) · organiza @${esc(t.organizer_username)}</p>
+      </div>
+      <div class="t-actions">
+        ${t.status === 'registration' && currentUser
+          ? (me.joined ? '<button class="btn" id="leave">Salir del torneo</button>' : '<button class="btn primary" id="join">Inscribirme</button>')
+          : ''}
+        ${!currentUser && t.status === 'registration' ? '<a class="btn primary" href="#/login">Inicia sesión para inscribirte</a>' : ''}
+      </div>
+    </div>
+    <div class="error" id="err"></div>
+
+    ${currentUser && !currentUser.pokemon_id && t.status === 'registration' && !me.joined
+      ? `<div class="panel">${pokemonIdForm('')}</div>` : ''}
+
+    ${me.joined ? `
+      ${me.match ? vsCard(me.match) : ''}
+      <div class="panel player-card">
+        <div class="player-top">
+          <div><h2>Tu torneo</h2><p class="streak-line"><b>Racha:</b> ${streakText(me)} ${pills(me.last)}</p></div>
+          <div class="stat-row">
+            <div class="tstat win"><b>${me.wins}</b><span>Victorias</span></div>
+            <div class="tstat loss"><b>${me.losses}</b><span>Derrotas</span></div>
+            <div class="tstat"><b>${me.ties}</b><span>Empates</span></div>
+          </div>
+        </div>
+      </div>` : ''}
+
+    ${d.can_manage ? `
+      <div class="panel organizer">
+        <h2>Panel de organizador</h2>
+        <p class="muted">${t.status === 'registration' ? 'Cuando estén todos, genera la ronda 1: se cierran las inscripciones y se emparejan al azar.'
+          : t.status === 'running' ? 'Captura los resultados de la ronda; cuando estén completos genera la siguiente (emparejamiento suizo por puntos, sin revanchas).'
+          : 'Torneo terminado.'}</p>
+        <div class="t-actions">
+          ${t.status !== 'finished' && !(t.rounds && t.current_round >= t.rounds)
+            ? `<button class="btn primary" id="nextRound" ${t.status === 'running' && !d.round_complete ? 'disabled' : ''}>${t.status === 'registration' ? 'Empezar · generar ronda 1' : `Generar ronda ${t.current_round + 1}`}</button>` : ''}
+          ${t.status === 'running' ? `<button class="btn" id="finish" ${d.round_complete ? '' : 'disabled'}>Finalizar torneo</button>` : ''}
+          ${t.status === 'registration' ? '<button class="btn danger" id="del">Borrar torneo</button>' : ''}
+        </div>
+      </div>` : ''}
+
+    ${d.rounds.length ? [...d.rounds].reverse().map(r => `
+      <h2>Ronda ${r.round}${r.round === t.current_round && t.status === 'running' ? ' <span class="badge t-running">en curso</span>' : ''}</h2>
+      <div class="panel" style="overflow-x:auto">
+        <table class="mine pairings"><thead><tr><th>Mesa</th><th>Jugador 1</th><th></th><th>Jugador 2</th><th>Resultado</th></tr></thead>
+        <tbody>${r.matches.map(m => `<tr class="${[m.player1, m.player2].some(p => p && currentUser && p.user_id === currentUser.id) ? 'mine-row' : ''}">
+          <td>${m.table_no}</td><td>${nameOf(m.player1)}</td><td class="muted">vs</td>
+          <td>${m.bye ? '<span class="muted">— bye —</span>' : nameOf(m.player2)}</td><td>${resultCell(m, r.round)}</td></tr>`).join('')}</tbody></table>
+      </div>`).join('') : ''}
+
+    ${t.status !== 'registration' ? `
+      <h2>Clasificación</h2>
+      <div class="panel" style="overflow-x:auto">
+        <table class="mine"><thead><tr><th>#</th><th>Jugador</th><th>Récord</th><th>Puntos</th><th>% rivales</th></tr></thead>
+        <tbody>${d.standings.map(s => `<tr class="${currentUser && s.user_id === currentUser.id ? 'mine-row' : ''}">
+          <td>${s.place}${s.place === 1 && t.status === 'finished' ? ' 👑' : ''}</td><td>${nameOf(s)}</td>
+          <td>${record(s)}</td><td><b>${s.points}</b></td><td>${s.opp_win_pct}%</td></tr>`).join('')}</tbody></table>
+      </div>` : ''}
+
+    <h2>Jugadores inscritos (${d.players.length})</h2>
+    ${d.players.length ? `<div class="panel" style="overflow-x:auto">
+      <table class="mine"><thead><tr><th>Jugador</th><th>Zona</th>${d.can_manage ? '<th>ID Pokémon</th>' : ''}</tr></thead>
+      <tbody>${d.players.map(p => `<tr><td>${nameOf(p)}</td><td>${esc(p.location || '—')}</td>${d.can_manage ? `<td>${esc(p.pokemon_id || '—')}</td>` : ''}</tr>`).join('')}</tbody></table>
+    </div>` : '<p class="muted">Todavía no hay jugadores inscritos.</p>'}`;
+
+  const reload = () => viewTournament(id);
+  const act = (elId, fn) => document.getElementById(elId)?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { await fn(); } catch (err) { document.getElementById('err').textContent = err.message; e.currentTarget.disabled = false; }
+  });
+  act('join', async () => { await api(`/api/tournaments/${id}/join`, { method: 'POST' }); toast('¡Inscrito! Suerte en la arena'); reload(); });
+  act('leave', async () => { await api(`/api/tournaments/${id}/leave`, { method: 'POST' }); toast('Saliste del torneo'); reload(); });
+  act('nextRound', async () => { const { round } = await api(`/api/tournaments/${id}/rounds`, { method: 'POST' }); toast(`Ronda ${round} emparejada`); reload(); });
+  act('finish', async () => {
+    if (!confirm('¿Finalizar el torneo? Ya no se podrán generar más rondas.')) { document.getElementById('finish').disabled = false; return; }
+    await api(`/api/tournaments/${id}/finish`, { method: 'POST' }); toast('Torneo finalizado'); reload();
+  });
+  act('del', async () => {
+    if (!confirm('¿Borrar este torneo? No se puede deshacer.')) { document.getElementById('del').disabled = false; return; }
+    await api(`/api/tournaments/${id}`, { method: 'DELETE' }); toast('Torneo borrado'); go('#/torneos');
+  });
+  $app.querySelectorAll('[data-res]').forEach(s => s.addEventListener('change', async () => {
+    try {
+      await api(`/api/tournaments/${id}/matches/${s.dataset.res}`, { method: 'PUT', body: { result: s.value } });
+      toast('Resultado guardado'); reload();
+    } catch (err) { document.getElementById('err').textContent = err.message; }
+  }));
+  bindPokemonIdForm(reload);
 }
 
 function requireLogin() {
@@ -634,6 +931,7 @@ async function router() {
   const parts = (path || '/').split('/').filter(Boolean);
   const params = new URLSearchParams(query);
   window.scrollTo(0, 0);
+  refreshMatchBanner();
   try {
     switch (parts[0]) {
       case undefined: return await viewCatalog(params);
@@ -645,6 +943,8 @@ async function router() {
       case 'vender': return await viewListingForm();
       case 'editar': return await viewListingForm(parts[1]);
       case 'perfil': return viewProfile();
+      case 'torneos': return parts[1] === 'nuevo' ? viewTournamentForm() : await viewTournaments();
+      case 'torneo': return await viewTournament(parts[1]);
       default: $app.innerHTML = '<div class="empty">Página no encontrada. <a href="#/">Ir al catálogo</a></div>';
     }
   } catch (err) {

@@ -34,6 +34,8 @@ const run = async () => {
     const c = await call('/api/listings', { expect: 200 }); ok(`catálogo: ${c.data.listings.length} cartas`);
     await call('/api/auth/me', { expect: 200 }); ok('sesión (anónima)');
     await call('/api/listings/mine', { expect: 401 }); ok('rutas privadas protegidas');
+    const tl = await call('/api/tournaments', { expect: 200 }); ok(`torneos: ${tl.data.tournaments.length}`);
+    await call('/api/tournaments/me', { expect: 401 }); ok('panel de torneos protegido');
     console.log('\nTodo OK (solo lectura).');
     return;
   }
@@ -102,11 +104,68 @@ const run = async () => {
 
   await call(`/api/listings/${l.id}`, { method: 'DELETE', expect: 200 });
   ok('carta borrada (y sus fotos)');
+
+  // ---------- Torneos: ID de jugador, inscripción, ronda, resultado y racha ----------
+  const pid = () => String(Date.now()).slice(-7) + Math.floor(Math.random() * 90 + 10);
+  const tour = await call('/api/tournaments', { method: 'POST', expect: 201,
+    body: { name: `Torneo de prueba ${u}`, location: 'Ciudad de Prueba', starts_at: '2030-01-01T18:00', rounds: '2' } });
+  const t = tour.data.tournament;
+  ok(`torneo creado id=${t.id}`);
+  await call(`/api/tournaments/${t.id}/join`, { method: 'POST', expect: 400 });
+  ok('inscripción sin ID de jugador rechazada');
+  await call('/api/auth/me/pokemon-id', { method: 'PUT', expect: 400, body: { pokemon_id: '12ab' } });
+  const myPid = pid();
+  const linked = await call('/api/auth/me/pokemon-id', { method: 'PUT', expect: 200, body: { pokemon_id: myPid } });
+  if (linked.data.user.pokemon_id !== myPid) throw new Error('el ID de jugador no se guardó');
+  ok(`ID de jugador vinculado (${myPid}); ID inválido rechazado`);
+  await call(`/api/tournaments/${t.id}/join`, { method: 'POST', expect: 200 });
+  const host = cookie;
+
+  // Segundo jugador (rival)
+  cookie = '';
+  const u2 = `${u}_b`;
+  await call('/api/auth/register', { method: 'POST', expect: 201,
+    body: { username: u2, email: `${u2}@example.test`, password: 'smoketest123', ...profile } });
+  await call('/api/auth/me/pokemon-id', { method: 'PUT', expect: 409, body: { pokemon_id: myPid } });
+  ok('ID de jugador duplicado rechazado');
+  await call('/api/auth/me/pokemon-id', { method: 'PUT', expect: 200, body: { pokemon_id: pid() } });
+  await call(`/api/tournaments/${t.id}/join`, { method: 'POST', expect: 200 });
+  await call(`/api/tournaments/${t.id}/rounds`, { method: 'POST', expect: 403 });
+  const rival = cookie;
+  ok(`${u2} inscrito; no organizador no puede generar rondas`);
+
+  cookie = host;
+  await call(`/api/tournaments/${t.id}/rounds`, { method: 'POST', expect: 201 });
+  const r1 = (await call(`/api/tournaments/${t.id}`, { expect: 200 })).data;
+  const m = r1.rounds[0].matches[0];
+  if (!r1.me.match?.opponent || r1.me.match.opponent.username !== u2) throw new Error(`rival incorrecto: ${JSON.stringify(r1.me)}`);
+  if (!r1.players.every(p => p.pokemon_id)) throw new Error('el organizador debería ver los ID de jugador');
+  ok(`ronda 1: mesa ${m.table_no}, rival ${r1.me.match.opponent.username}`);
+  await call(`/api/tournaments/${t.id}/rounds`, { method: 'POST', expect: 400 });
+  ok('siguiente ronda sin resultados rechazada');
+  const iWin = m.player1.username === u ? 'p1' : 'p2';
+  await call(`/api/tournaments/${t.id}/matches/1/${m.table_no}`, { method: 'PUT', expect: 200, body: { result: iWin } });
+  const meT = (await call('/api/tournaments/me', { expect: 200 })).data;
+  if (meT.overall.wins !== 1 || meT.overall.current?.type !== 'W') throw new Error(`racha incorrecta: ${JSON.stringify(meT.overall)}`);
+  ok(`resultado capturado; récord ${meT.overall.wins}-${meT.overall.losses}-${meT.overall.ties}, racha ${meT.overall.current.count}V`);
+
+  cookie = rival;
+  const pub = (await call(`/api/tournaments/${t.id}`, { expect: 200 })).data;
+  if (pub.players.some(p => 'pokemon_id' in p)) throw new Error('un jugador no debería ver los ID de los demás');
+  if (pub.me.losses !== 1 || pub.me.current?.type !== 'L') throw new Error(`récord del rival incorrecto: ${JSON.stringify(pub.me)}`);
+  ok('el rival ve su derrota y no ve los ID de jugador');
+  await call('/api/auth/logout', { method: 'POST', expect: 200 });
+
+  cookie = host;
+  await call(`/api/tournaments/${t.id}/finish`, { method: 'POST', expect: 200 });
+  const list2 = await call('/api/tournaments', { expect: 200 });
+  if (list2.data.tournaments.find(x => String(x.id) === String(t.id))?.status !== 'finished') throw new Error('el torneo no quedó terminado');
+  ok('torneo finalizado');
   await call('/api/auth/logout', { method: 'POST', expect: 200 });
   const me = await call('/api/auth/me', { expect: 200 });
   if (me.data.user) throw new Error('la sesión sigue activa tras cerrar sesión');
   ok('sesión cerrada');
-  console.log(`\nTodo OK. (Queda el usuario de prueba "${u}" sin cartas.)`);
+  console.log(`\nTodo OK. (Quedan los usuarios de prueba "${u}" y "${u2}" sin cartas, y un torneo de prueba terminado.)`);
 };
 
 run().catch(err => { console.error('\n✘ FALLÓ:', err.message); process.exit(1); });

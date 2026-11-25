@@ -27,7 +27,11 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
   convierte con el tipo de cambio del día (Banco Central Europeo vía Frankfurter; respaldo open.er-api.com),
   guardado en caché 6 horas. Consulta el tipo de cambio en `GET /api/fx`.
   El precio se consulta en el servidor al guardar, así el vendedor no puede falsearlo.
-- Portada ilustrada (castillo, dragón, atardecer) y efecto holográfico 3D en las cartas.
+- Portada ilustrada (castillo gótico, un dragón que cruza el cielo y, tras él, un caballero calavera a caballo) y efecto holográfico 3D en las cartas.
+- **Torneos locales Pokémon** (`#/torneos`): cada jugador vincula su ID de Play! Pokémon y se inscribe; quien organiza
+  genera las rondas (emparejamiento suizo por puntos, sin revanchas, bye rotativo) y captura resultados. Cada jugador
+  ve en un aviso fijo contra quién juega y en qué mesa, su récord, su racha actual y su historial. El ID de jugador
+  solo lo ve quien organiza.
 - Perfil público de cada vendedor con su contacto y sus cartas.
 
 ## Ambiente QA en AWS (serverless)
