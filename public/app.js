@@ -235,7 +235,8 @@ async function viewListing(id) {
           <button type="button" class="thumb ${i === 0 ? 'active' : ''}" data-i="${i}" title="${esc(g.label)}">
             <img src="${esc(g.url)}" alt=""><span>${g.real ? '📷' : 'Oficial'}</span>
           </button>`).join('')}</div>` : ''}
-        ${l.photos.length ? `<p class="card-meta">📷 ${l.photos.length} foto(s) real(es) subidas por el vendedor.</p>` : ''}
+        ${l.photos.length ? `<p class="card-meta">📷 ${l.photos.length} foto(s) real(es) subidas por el vendedor.</p>`
+          : '<p class="card-meta">Sin fotos reales: en cartas de bajo valor son opcionales. La imagen es la oficial de referencia; pide fotos al vendedor si las necesitas.</p>'}
       </div>
       <div>
         <span class="badge ${l.game}">${GAME_LABEL[l.game]}</span>
@@ -404,10 +405,14 @@ async function viewMine() {
 
 async function viewListingForm(id) {
   if (!requireLogin()) return;
-  const l = id ? (await api(`/api/listings/${id}`)).listing : {
-    game: 'pokemon', condition: 'NM', language: 'Español', quantity: 1, price: '',
-  };
+  const [l, fxInfo] = await Promise.all([
+    id ? api(`/api/listings/${id}`).then(r => r.listing) : { game: 'pokemon', condition: 'NM', language: 'Español', quantity: 1, price: '' },
+    api('/api/fx').catch(() => ({})),
+  ]);
   if (id && l.user_id !== currentUser.id) { $app.innerHTML = '<div class="empty">Esta publicación no es tuya.</div>'; return; }
+  // Fotos obligatorias solo si la carta vale más de US$2.50 (mercado o precio del vendedor; el servidor lo vuelve a revisar)
+  const PHOTO_MIN_USD = fxInfo.photos?.min_usd ?? 2.5;
+  const usdRate = fxInfo.fx?.rate || fxInfo.photos?.fallback_rate || 17;
 
   // Estado del formulario: carta de referencia elegida y fotos
   // ref.market_price está en MXN (convertido en el servidor); ref.usd es el valor original de TCGplayer
@@ -444,8 +449,9 @@ async function viewListingForm(id) {
           <div class="field"><label>Rareza</label><input name="rarity" maxlength="60" value="${esc(l.rarity)}"></div>
         </div>
 
-        <h2 class="step">2. Fotos reales de tu carta <span class="req">obligatorio</span></h2>
-        <p class="card-meta" style="margin-top:-.4rem">Sube de 1 a ${MAX_PHOTOS} fotos de <b>tu</b> carta (frente y reverso, con buena luz). Los compradores las verán al abrir la publicación.</p>
+        <h2 class="step">2. Fotos reales de tu carta <span class="req" id="photoReq"></span></h2>
+        <p class="card-meta" style="margin-top:-.4rem">Sube hasta ${MAX_PHOTOS} fotos de <b>tu</b> carta (frente y reverso, con buena luz). Los compradores las verán al abrir la publicación.
+          <span id="photoRule"></span></p>
         <div class="photo-grid" id="photoGrid"></div>
         <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp" multiple hidden>
 
@@ -504,6 +510,7 @@ async function viewListingForm(id) {
     hint.innerHTML = ref?.market_price
       ? `Mercado: ${money(ref.market_price)}${f.price.value ? ' · ' + marketCompare(price, ref.market_price) : ''}`
       : '';
+    updatePhotoRule(); // el precio o la carta elegida cambian si las fotos son obligatorias
   }
   f.price.addEventListener('input', renderPriceHint);
 
@@ -596,15 +603,32 @@ async function viewListingForm(id) {
     renderPhotos();
   });
 
+  // ¿Hacen falta fotos? Si la carta vale más de US$2.50 (precio de mercado o el precio que pones)
+  function photosNeeded() {
+    const sellerUsd = (Number(f.price.value) || 0) / usdRate;
+    return Math.max(Number(ref?.usd) || 0, sellerUsd) > PHOTO_MIN_USD;
+  }
+  function updatePhotoRule() {
+    const need = photosNeeded();
+    const req = document.getElementById('photoReq');
+    req.textContent = need ? 'obligatorio' : 'opcional';
+    req.classList.toggle('optional', !need);
+    document.getElementById('photoRule').textContent = need
+      ? `Como la carta vale más de US$${PHOTO_MIN_USD.toFixed(2)}, necesitas al menos una foto.`
+      : `Las fotos son opcionales en cartas de hasta US$${PHOTO_MIN_USD.toFixed(2)} (unos ${money(Math.round(PHOTO_MIN_USD * usdRate))}); si no subes, se muestra la imagen oficial.`;
+  }
   renderRef();
   renderPhotos();
+  updatePhotoRule();
 
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
     const err = document.getElementById('err');
     const body = formData(f);
     if (!body.card_name.trim()) { err.textContent = 'Escribe el nombre de la carta.'; return; }
-    if (keepPhotos.length + newPhotos.length < 1) { err.textContent = 'Sube al menos una foto real de tu carta.'; return; }
+    if (keepPhotos.length + newPhotos.length < 1 && photosNeeded()) {
+      err.textContent = `Esta carta vale más de US$${PHOTO_MIN_USD.toFixed(2)}: sube al menos una foto real de tu carta.`; return;
+    }
     if (body.price === '' || Number(body.price) < 0) { err.textContent = 'Indica un precio válido.'; return; }
     body.price = Number(body.price); body.quantity = Number(body.quantity);
     body.ref_id = ref?.ref_id || '';

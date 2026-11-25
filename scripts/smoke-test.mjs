@@ -61,8 +61,14 @@ const run = async () => {
     body: { username: u, email: `${u}@example.test`, password: 'smoketest123', ...profile } });
   ok('usuario duplicado rechazado');
 
-  await call('/api/listings', { method: 'POST', expect: 400, body: { game: 'pokemon', card_name: 'X', price: 1 } });
-  ok('carta sin foto rechazada');
+  // Fotos obligatorias solo si la carta vale más de US$2.50 (aquí, por el precio del vendedor en MXN)
+  await call('/api/listings', { method: 'POST', expect: 400, body: { game: 'pokemon', card_name: 'X', price: 500 } });
+  ok('carta de $500 MXN sin foto rechazada');
+  const cheap = await call('/api/listings', { method: 'POST', expect: 201, body: { game: 'pokemon', card_name: 'Carta común de prueba', price: 10 } });
+  if (cheap.data.listing.photos.length !== 0) throw new Error('la carta barata no debería tener fotos');
+  await call(`/api/listings/${cheap.data.listing.id}`, { method: 'PUT', expect: 400, body: { ...cheap.data.listing, price: 500, keep_photos: [], new_photos: [] } });
+  await call(`/api/listings/${cheap.data.listing.id}`, { method: 'DELETE', expect: 200 });
+  ok('carta de $10 MXN sin foto aceptada; subirle el precio a $500 sin foto, rechazado');
 
   const lookup = await call('/api/lookup?game=yugioh&q=Dark%20Magician');
   const ref = lookup.status === 200 ? lookup.data.results[0] : null;
@@ -90,8 +96,8 @@ const run = async () => {
   const upd = await call(`/api/listings/${l.id}`, { method: 'PUT', expect: 200,
     body: { ...l, price: 10, keep_photos: [l.photos[0].id], new_photos: [] } });
   ok(`editada: precio=${upd.data.listing.price}, fotos=${upd.data.listing.photos.length}`);
-  await call(`/api/listings/${l.id}`, { method: 'PUT', expect: 400, body: { ...l, keep_photos: [], new_photos: [] } });
-  ok('quitar todas las fotos rechazado');
+  await call(`/api/listings/${l.id}`, { method: 'PUT', expect: 400, body: { ...l, price: 500, keep_photos: [], new_photos: [] } });
+  ok('quitar todas las fotos de una carta de más de US$2.50 rechazado');
 
   await call(`/api/listings/${l.id}/status`, { method: 'PATCH', expect: 200, body: { status: 'sold' } });
   ok('marcada como vendida');

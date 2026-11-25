@@ -122,7 +122,11 @@ app.use('/api', async (req, _res, next) => {
   req.fx = await getUsdMxn().catch(() => null);
   next();
 });
-app.get('/api/fx', (req, res) => res.json({ base: 'USD', quote: 'MXN', fx: fxInfo(req.fx) }));
+app.get('/api/fx', (req, res) => res.json({
+  base: 'USD', quote: 'MXN', fx: fxInfo(req.fx),
+  // Regla de fotos obligatorias (el formulario la usa para avisar; el servidor la vuelve a aplicar al guardar)
+  photos: { min_usd: PHOTO_MIN_USD, fallback_rate: FALLBACK_USD_MXN },
+}));
 
 function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Debes iniciar sesión.' });
@@ -285,13 +289,23 @@ app.get('/api/listings/:id', async (req, res) => {
   res.json({ listing: listingOut(l, req.fx) });
 });
 
+// Las fotos reales solo son obligatorias si la carta vale más de US$2.50: se toma el mayor entre el precio
+// de mercado (consultado en el servidor) y el precio del vendedor convertido a dólares.
+const PHOTO_MIN_USD = 2.5;
+const FALLBACK_USD_MXN = 17; // si no hay tipo de cambio, uno bajo (exige foto antes, nunca después)
+function photosRequired(marketUsd, priceMxn, fx) {
+  const sellerUsd = priceMxn / (fx?.rate || FALLBACK_USD_MXN);
+  return Math.max(Number(marketUsd) || 0, sellerUsd) > PHOTO_MIN_USD;
+}
+const PHOTO_REQUIRED_MSG = `Esta carta vale más de US$${PHOTO_MIN_USD.toFixed(2)}: sube al menos una foto real de tu carta.`;
+
 app.post('/api/listings', requireAuth, async (req, res) => {
   const data = validateListing(req.body);
   const newPhotos = Array.isArray(req.body.new_photos) ? req.body.new_photos : [];
-  if (newPhotos.length < 1) throw new HttpError(400, 'Debes subir al menos una foto real de tu carta.');
   if (newPhotos.length > MAX_PHOTOS) throw new HttpError(400, `Máximo ${MAX_PHOTOS} fotos por carta.`);
 
   const ref = await resolveReference(data);
+  if (!newPhotos.length && photosRequired(ref.market_price, data.price, req.fx)) throw new HttpError(400, PHOTO_REQUIRED_MSG);
   const photos = await storePhotos(newPhotos);
   const listing = await repo.createListing(req.user.id, { ...data, ...ref }, photos);
   res.status(201).json({ listing: listingOut(listing, req.fx) });
@@ -308,16 +322,16 @@ app.put('/api/listings/:id', requireAuth, async (req, res) => {
   const existing = await ownListing(req);
   const data = validateListing(req.body);
 
-  // Fotos: las que el vendedor conserva + las nuevas. Siempre debe quedar al menos una.
+  // Fotos: las que el vendedor conserva + las nuevas (al menos una si la carta vale más de US$2.50)
   const current = existing.photos || [];
   const keepIds = Array.isArray(req.body.keep_photos) ? req.body.keep_photos.map(String) : current.map(p => String(p.id));
   const kept = current.filter(p => keepIds.includes(String(p.id)));
   const removed = current.filter(p => !keepIds.includes(String(p.id)));
   const newPhotos = Array.isArray(req.body.new_photos) ? req.body.new_photos : [];
-  if (kept.length + newPhotos.length < 1) throw new HttpError(400, 'Tu publicación debe tener al menos una foto real de la carta.');
   if (kept.length + newPhotos.length > MAX_PHOTOS) throw new HttpError(400, `Máximo ${MAX_PHOTOS} fotos por carta.`);
 
   const ref = await resolveReference(data, existing);
+  if (kept.length + newPhotos.length < 1 && photosRequired(ref.market_price, data.price, req.fx)) throw new HttpError(400, PHOTO_REQUIRED_MSG);
   const added = await storePhotos(newPhotos);
   const status = ['sold', 'available'].includes(req.body.status) ? req.body.status : existing.status;
 
