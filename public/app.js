@@ -25,6 +25,35 @@ const $app = document.getElementById('app');
 const $nav = document.getElementById('nav');
 let currentUser = null;
 
+// ---------- Celular: menú desplegable, tablas como tarjetas y altura de la barra ----------
+const $topbar = document.querySelector('.topbar');
+const $navToggle = document.getElementById('navToggle');
+function setMenu(open) {
+  $topbar.classList.toggle('nav-open', open);
+  $navToggle.setAttribute('aria-expanded', String(open));
+  $navToggle.setAttribute('aria-label', open ? 'Cerrar menú' : 'Abrir menú');
+}
+$navToggle.addEventListener('click', () => setMenu(!$topbar.classList.contains('nav-open')));
+$nav.addEventListener('click', e => { if (e.target.closest('a, button')) setMenu(false); });
+document.addEventListener('click', e => { if (!$topbar.contains(e.target)) setMenu(false); });
+window.addEventListener('hashchange', () => setMenu(false));
+
+// El aviso de partida se pega justo debajo de la barra, mida lo que mida
+const syncTopbar = () => document.documentElement.style.setProperty('--topbar-h', `${$topbar.offsetHeight}px`);
+new ResizeObserver(syncTopbar).observe($topbar);
+
+// En pantallas angostas cada fila de tabla se ve como tarjeta: cada celda lleva el nombre de su columna
+function labelTables(root = $app) {
+  root.querySelectorAll('table.mine').forEach(t => {
+    const heads = [...t.querySelectorAll('thead th')].map(th => th.textContent.trim());
+    t.querySelectorAll('tbody tr').forEach(tr => [...tr.children].forEach((td, i) => {
+      if (heads[i] && !td.dataset.label) td.dataset.label = heads[i];
+      td.classList.toggle('no-label', !heads[i]);
+    }));
+  });
+}
+new MutationObserver(() => labelTables()).observe($app, { childList: true, subtree: true });
+
 const GAME_LABEL = { pokemon: 'Pokémon', yugioh: 'Yu-Gi-Oh!' };
 const CONDITIONS = {
   NM: 'Near Mint', LP: 'Lightly Played', MP: 'Moderately Played', HP: 'Heavily Played', DMG: 'Dañada',
@@ -46,6 +75,18 @@ const usd = (n) => `US${new Intl.NumberFormat('en-US', { style: 'currency', curr
 const fxNote = (fx) => (fx ? `tipo de cambio ${fx.rate.toFixed(2)} MXN por dólar (${esc(fx.source)}, ${esc(fx.date || '')})` : '');
 const safeImg = (url) => (/^(https?:\/\/|\/uploads\/)/i.test(url || '') ? url : '');
 const MAX_PHOTOS = 6;
+
+// Botones para llamar o escribir por WhatsApp al vendedor (números de 10 dígitos se toman como de México, +52)
+function contactButtons(contact, cardName) {
+  const digits = String(contact).replace(/\D/g, '');
+  if (digits.length < 8) return '';
+  const intl = digits.length === 10 ? `52${digits}` : digits;
+  const msg = encodeURIComponent(`Hola, vi tu carta "${cardName}" en Macai TCG. ¿Sigue disponible?`);
+  return `<div class="contact-btns">
+    <a class="btn small" href="tel:+${intl}">📞 Llamar</a>
+    <a class="btn small whatsapp" href="https://wa.me/${intl}?text=${msg}" target="_blank" rel="noopener">💬 WhatsApp</a>
+  </div>`;
+}
 
 // Imagen que representa la carta en el catálogo: la oficial si existe, si no la primera foto real
 const coverImg = (l) => safeImg(l.image_url) || safeImg(l.cover_photo);
@@ -263,7 +304,7 @@ async function viewListing(id) {
           <div class="muted">Vendedor</div>
           <div><a href="#/vendedor/${encodeURIComponent(l.username)}"><b>${esc(l.display_name)}</b> @${esc(l.username)}</a></div>
           ${l.location ? `<div class="muted">📍 ${esc(l.location)}</div>` : ''}
-          ${l.contact ? `<div>Contacto: ${esc(l.contact)}</div>` : '<div class="muted">El vendedor no ha dejado un contacto.</div>'}
+          ${l.contact ? `<div>Contacto: ${esc(l.contact)}</div>${contactButtons(l.contact, l.card_name)}` : '<div class="muted">El vendedor no ha dejado un contacto.</div>'}
         </div>
         ${mine ? `<p style="margin-top:1rem"><a class="btn" href="#/editar/${l.id}">Editar mi publicación</a></p>` : ''}
       </div>
@@ -463,9 +504,9 @@ async function viewListingForm(id) {
           <div class="field"><label>Idioma</label><select name="language">
             ${LANGUAGES.map(x => `<option ${l.language === x ? 'selected' : ''}>${x}</option>`).join('')}
           </select></div>
-          <div class="field"><label>Precio (MXN)</label><input name="price" type="number" min="0" step="0.01" required value="${esc(l.price)}">
+          <div class="field"><label>Precio (MXN)</label><input name="price" type="number" inputmode="decimal" min="0" step="0.01" required value="${esc(l.price)}">
             <div class="card-meta" id="priceHint"></div></div>
-          <div class="field"><label>Cantidad</label><input name="quantity" type="number" min="0" max="999" step="1" required value="${esc(l.quantity)}"></div>
+          <div class="field"><label>Cantidad</label><input name="quantity" type="number" inputmode="numeric" min="0" max="999" step="1" required value="${esc(l.quantity)}"></div>
         </div>
         <div class="field"><label>Notas para el comprador</label><textarea name="notes" rows="3" maxlength="1000" placeholder="Detalles, envío, intercambios…">${esc(l.notes)}</textarea></div>
         <div class="error" id="err"></div>

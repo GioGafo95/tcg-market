@@ -2,7 +2,8 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1e1440">
   <title>Macai TCG · Mercado de cartas Pokémon y Yu-Gi-Oh!</title>
   <link rel="icon" type="image/png" href="/img/icon-macai.png">
   <link rel="apple-touch-icon" href="/img/icon-macai.png">
@@ -14,6 +15,9 @@
 <body>
   <header class="topbar">
     <a href="#/" class="brand" aria-label="Macai TCG · inicio"><img class="brand-logo" src="/img/logo-macai.webp" alt="Macai TCG" width="720" height="572"></a>
+    <button class="nav-toggle" id="navToggle" type="button" aria-label="Abrir menú" aria-expanded="false" aria-controls="nav">
+      <span></span><span></span><span></span>
+    </button>
     <nav id="nav"></nav>
   </header>
   <div id="matchBanner" class="match-banner" hidden></div>
