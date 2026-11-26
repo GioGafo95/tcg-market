@@ -43,6 +43,11 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
     opcional; corrige cualquier resultado de cualquier ronda; rehace emparejamientos, intercambia jugadores, deshace la
     ronda; da de baja o reactiva jugadores; inscripciones tardías; cambia rondas, top cut, formato y datos; reabre.
   - Cada jugador ve su mesa, su rival, su récord, su racha y la clasificación con los desempates de su juego.
+  - **Reloj de la ronda** ([public/round-timer.js](public/round-timer.js)): arranca solo al generar cada ronda; el
+    organizador pausa, reanuda, suma/resta minutos o reinicia; `#/torneo/:id/reloj` lo muestra en pantalla grande. Con
+    "Activar avisos" suena un tono a los 5 minutos y una alarma (más vibración y notificación) al terminar, mientras la
+    página esté abierta.
+  - "Mi deck en este torneo" se elige de los decks guardados del jugador (mismo juego).
 - **Importar torneos oficiales desde TOM** (`#/torneos/importar`): se sube el archivo `.tdf` que genera TOM (el mismo
   que va a Play! Tools). Quedan sus rondas, top cut, resultados y la clasificación oficial, y el torneo aparece en el
   historial de cada jugador con su ID vinculado. Subido a mitad del evento, cada jugador ve su rival y mesa de la ronda.
@@ -190,7 +195,9 @@ El dominio se toma de la variable del repo `QA_DOMAIN` (por defecto `tcg.macai.c
 | POST | /api/meta/refresh?part=pokemon (o yugioh) | Rehace esa foto del metajuego si tiene más de 5 h |
 | GET/POST | /api/my-matches | Mis partidas / registrar (física o con log de TCG Live) |
 | GET/PUT/DELETE | /api/my-matches/:id | Ver (con log), editar y borrar una partida |
-| PUT | /api/tournaments/:id/deck | Mi deck en un torneo de la app |
+| PUT | /api/tournaments/:id/deck | Mi deck en un torneo de la app (`deck_id` de un deck guardado) |
+| GET | /api/tournaments/:id/timer | Reloj de la ronda en curso (público) |
+| POST | /api/tournaments/:id/timer | (organizador) start · pause · resume · add (±minutos) · reset |
 | PUT | /api/tournaments/:id | (organizador) Editar datos y configuración |
 | POST/DELETE | /api/tournaments/:id/players[/:userId] | (organizador) Agregar usuario registrado / quitar o dar de baja (?undo=1 reactiva) |
 | POST | /api/tournaments/:id/topcut | (organizador) Iniciar el top cut |

@@ -459,6 +459,7 @@ function validateTournament(body, current = null) {
   if (top !== 'auto' && !TOP_CUTS.includes(top)) throw new HttpError(400, 'El top cut debe ser automático, ninguno, 2, 4, 8, 16 o 32.');
   const config = {
     ...(current?.config?.top_cut_resolved != null ? { top_cut_resolved: current.config.top_cut_resolved } : {}),
+    ...(current?.config?.timer ? { timer: current.config.timer } : {}),
     top_cut: top,
     best_of: Number(c.best_of) === 1 ? 1 : 3,
     round_minutes: Math.min(120, Math.max(10, Number(c.round_minutes) || (game === 'yugioh' ? 50 : 50))),
@@ -470,6 +471,19 @@ function validateTournament(body, current = null) {
 const gameOf = t => (t.game === 'yugioh' ? 'yugioh' : 'pokemon');
 const idField = t => (gameOf(t) === 'yugioh' ? 'konami_id' : 'pokemon_id');
 const idLabel = t => (gameOf(t) === 'yugioh' ? 'tu KONAMI CARD GAME ID' : 'tu ID de jugador Pokémon');
+// Reloj de la ronda (guardado en config.timer): { round, duration, started_at, paused_remaining }
+// Arranca solo al generar cada ronda; el organizador puede pausarlo, ajustarlo o reiniciarlo.
+const newTimer = (t, round) => ({ round, duration: (t.config?.round_minutes || 50) * 60, started_at: new Date().toISOString(), paused_remaining: null });
+function timerState(t) {
+  const tm = t.config?.timer;
+  const minutes = t.config?.round_minutes || 50;
+  if (!tm || tm.round !== t.current_round) return { round: t.current_round, duration: minutes * 60, status: 'idle', remaining: minutes * 60 };
+  if (tm.paused_remaining != null) return { round: tm.round, duration: tm.duration, status: 'paused', remaining: tm.paused_remaining };
+  const remaining = Math.max(0, tm.duration - (Date.now() - Date.parse(tm.started_at)) / 1000);
+  return { round: tm.round, duration: tm.duration, status: remaining > 0 ? 'running' : 'ended', remaining: Math.round(remaining * 10) / 10,
+           ends_at: new Date(Date.parse(tm.started_at) + tm.duration * 1000).toISOString() };
+}
+
 // Estructura efectiva: la elegida por el organizador o la recomendada para los jugadores activos
 function structureOf(t, players) {
   const rec = recommendedStructure(gameOf(t), players.filter(p => !p.dropped).length);
@@ -613,6 +627,7 @@ app.get('/api/tournaments/:id', async (req, res) => {
   const struct = L.tdf ? null : structureOf(t, players);
   res.json({
     rules: L.tdf ? null : { game: gameOf(t), label: RULESET[gameOf(t)].label, ties: RULESET[gameOf(t)].ties, ...struct },
+    timer: L.tdf ? null : timerState(t), server_now: new Date().toISOString(),
     tournament: { ...tournament, player_count: players.length,
                   ...(L.tdf ? { organizer_tom: organizerName(tdf_data.organizer), categories: tdf_data.categories.map(c => c.label) } : {}) },
     can_manage: manage,
@@ -682,7 +697,14 @@ app.put('/api/tournaments/:id/deck', requireAuth, async (req, res) => {
   if (!t || t.source === 'tdf') throw new HttpError(404, 'Torneo no encontrado.');
   const players = await repo.getTournamentPlayers(t.id);
   if (!players.some(p => sameId(p.user_id, req.user.id))) throw new HttpError(400, 'Primero inscríbete en el torneo.');
-  const deck = str(req.body.deck, 60).replace(/\s+/g, ' ');
+  // Solo un deck guardado del propio usuario y del mismo juego que el torneo (vacío = quitarlo)
+  let deck = '';
+  if (req.body.deck_id) {
+    const d = await repo.getDeck(str(String(req.body.deck_id), 40));
+    if (!d || !sameId(d.user_id, req.user.id)) throw new HttpError(404, 'Ese deck no es tuyo.');
+    if (d.game !== gameOf(t)) throw new HttpError(400, `Elige un deck de ${gameOf(t) === 'yugioh' ? 'Yu-Gi-Oh!' : 'Pokémon'}.`);
+    deck = d.name;
+  }
   await repo.setTournamentDeck(t.id, req.user.id, deck);
   res.json({ ok: true, deck });
 });
@@ -712,7 +734,7 @@ app.post('/api/tournaments/:id/rounds', requireAuth, async (req, res) => {
     const next = nextTopRound(prev, round);
     if (!next.length) throw new HttpError(400, 'El top cut ya terminó: finaliza el torneo.');
     await repo.addMatches(t.id, next);
-    await repo.updateTournament(t.id, { current_round: round });
+    await repo.updateTournament(t.id, { current_round: round, config: { ...t.config, timer: newTimer(t, round) } });
     return res.status(201).json({ ok: true, round, phase: 'top' });
   }
   // Primera ronda: se fijan las rondas de suizo si eran automáticas
@@ -722,7 +744,7 @@ app.post('/api/tournaments/:id/rounds', requireAuth, async (req, res) => {
   if (rounds && round > rounds) throw new HttpError(400, 'Ya se jugaron todas las rondas de suizo: inicia el top cut o finaliza el torneo.');
   await repo.addMatches(t.id, pairRound(players, matches, round, game));
   await repo.updateTournament(t.id, { status: 'running', current_round: round, rounds,
-    ...(round === 1 ? { config: { ...t.config, top_cut_resolved: rec.top_cut } } : {}) });
+    config: { ...t.config, timer: newTimer(t, round), ...(round === 1 ? { top_cut_resolved: rec.top_cut } : {}) } });
   res.status(201).json({ ok: true, round, phase: 'swiss' });
 });
 
@@ -736,7 +758,7 @@ app.post('/api/tournaments/:id/topcut', requireAuth, async (req, res) => {
   if (table.filter(r => !r.dropped).length < size) throw new HttpError(400, 'No hay suficientes jugadores activos para ese top cut.');
   const round = t.current_round + 1;
   await repo.addMatches(t.id, firstTopRound(table, size, round));
-  await repo.updateTournament(t.id, { phase: 'top', current_round: round, config: { ...t.config, top_cut: size } });
+  await repo.updateTournament(t.id, { phase: 'top', current_round: round, config: { ...t.config, top_cut: size, timer: newTimer(t, round) } });
   res.status(201).json({ ok: true, round });
 });
 
@@ -748,7 +770,7 @@ app.delete('/api/tournaments/:id/rounds/current', requireAuth, async (req, res) 
   await repo.deleteRoundMatches(t.id, t.current_round);
   const round = t.current_round - 1;
   const stillTop = wasTop && matches.some(m => m.round === round && m.topcut);
-  await repo.updateTournament(t.id, { current_round: round, status: round === 0 ? 'registration' : 'running', phase: stillTop ? 'top' : 'swiss' });
+  await repo.updateTournament(t.id, { current_round: round, status: round === 0 ? 'registration' : 'running', phase: stillTop ? 'top' : 'swiss', config: { ...t.config, timer: null } });
   res.json({ ok: true, round });
 });
 
@@ -759,6 +781,7 @@ app.post('/api/tournaments/:id/rounds/current/repair', requireAuth, async (req, 
   await repo.deleteRoundMatches(t.id, t.current_round);
   const earlier = matches.filter(m => m.round < t.current_round);
   await repo.addMatches(t.id, pairRound(players, earlier, t.current_round, gameOf(t)));
+  await repo.updateTournament(t.id, { config: { ...t.config, timer: newTimer(t, t.current_round) } });
   res.json({ ok: true });
 });
 
@@ -834,6 +857,52 @@ app.delete('/api/tournaments/:id/players/:userId', requireAuth, async (req, res)
   if (t.status === 'registration') { await repo.leaveTournament(t.id, p.user_id); return res.json({ ok: true, removed: true }); }
   await repo.setPlayerDropped(t.id, p.user_id, Math.max(1, t.current_round));
   res.json({ ok: true, dropped: t.current_round });
+});
+
+// Reloj de la ronda: solo lectura para todos (los jugadores lo consultan cada pocos segundos)
+app.get('/api/tournaments/:id/timer', async (req, res) => {
+  const t = await repo.getTournament(str(req.params.id, 40));
+  if (!t || t.source === 'tdf') throw new HttpError(404, 'Torneo no encontrado.');
+  res.set('Cache-Control', 'no-store');
+  res.json({ timer: timerState(t), server_now: new Date().toISOString(), status: t.status, current_round: t.current_round });
+});
+
+// El organizador controla el reloj: start | pause | resume | add (minutos, puede ser negativo) | reset
+app.post('/api/tournaments/:id/timer', requireAuth, async (req, res) => {
+  const { t } = await managedTournament(req);
+  if (t.status !== 'running' || !t.current_round) throw new HttpError(400, 'El reloj se usa con una ronda en curso.');
+  const cur = timerState(t);
+  const action = str(req.body.action, 10);
+  let timer = t.config?.timer && t.config.timer.round === t.current_round ? { ...t.config.timer } : null;
+  const now = new Date().toISOString();
+  if (action === 'start') {
+    const minutes = Number(req.body.minutes) || t.config?.round_minutes || 50;
+    if (minutes < 1 || minutes > 180) throw new HttpError(400, 'Elige entre 1 y 180 minutos.');
+    timer = { round: t.current_round, duration: Math.round(minutes * 60), started_at: now, paused_remaining: null };
+  } else if (action === 'pause') {
+    if (cur.status !== 'running') throw new HttpError(400, 'El reloj no está corriendo.');
+    timer.paused_remaining = cur.remaining;
+  } else if (action === 'resume') {
+    if (cur.status !== 'paused') throw new HttpError(400, 'El reloj no está en pausa.');
+    // Se reanuda moviendo el inicio para que falte exactamente lo que quedaba
+    timer.started_at = new Date(Date.now() - (timer.duration - timer.paused_remaining) * 1000).toISOString();
+    timer.paused_remaining = null;
+  } else if (action === 'add') {
+    if (!timer) throw new HttpError(400, 'Primero inicia el reloj.');
+    const secs = Math.round((Number(req.body.minutes) || 0) * 60);
+    if (!secs) throw new HttpError(400, 'Indica cuántos minutos sumar o restar.');
+    if (cur.status === 'ended' && secs > 0) {
+      // Si ya había terminado, se vuelve a contar desde ahora
+      timer = { ...timer, duration: secs, started_at: now, paused_remaining: null };
+    } else {
+      timer.duration = Math.max(1, timer.duration + secs);
+      if (timer.paused_remaining != null) timer.paused_remaining = Math.max(0, timer.paused_remaining + secs);
+    }
+  } else if (action === 'reset') {
+    timer = null;
+  } else throw new HttpError(400, 'Acción no válida.');
+  const updated = await repo.updateTournament(t.id, { config: { ...t.config, timer } });
+  res.json({ timer: timerState(updated), server_now: new Date().toISOString() });
 });
 
 // Reabrir un torneo terminado (para corregir algo o jugar otra ronda)

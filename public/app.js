@@ -3,6 +3,7 @@ import { sceneSVG, emblemSVG } from './scene.js';
 import { SECTIONS, SECTION_LABEL, CATEGORY_LABEL, MAX_QTY, deckSummary, deckToText, parseDeckText, mergeCards } from './deck-rules.js';
 import { parseLog, analyze, guessDeck, turnSummary } from './ptcgl-log.js';
 import { mountCardBackground } from './bg-cards.js';
+import { startRoundTimer, applyTimer, clockHTML, alertsEnabled, enableAlerts, disableAlerts } from './round-timer.js';
 
 mountCardBackground();
 
@@ -1351,9 +1352,9 @@ async function viewTournaments() {
     <div class="t-hero">
       ${emblemSVG()}
       <div>
-        <span class="kicker">⚔ Torneos locales Pokémon ⚔</span>
+        <span class="kicker">⚔ Torneos locales · Pokémon y Yu-Gi-Oh! ⚔</span>
         <h1>La arena del reino</h1>
-        <p class="muted">Vincula tu ID de jugador, inscríbete en torneos de tu zona y entérate al instante de contra quién juegas cada ronda.</p>
+        <p class="muted">Vincula tus IDs de jugador, inscríbete en torneos de tu zona y entérate al instante de contra quién juegas cada ronda.</p>
       </div>
       ${currentUser ? `<div class="t-actions">
         <a class="btn" href="#/torneos/importar">⬆ Importar TDF de TOM</a>
@@ -1365,7 +1366,8 @@ async function viewTournaments() {
         <div class="player-top">
           <div>
             <h2>Mi ficha de jugador</h2>
-            <p class="muted">${me.pokemon_id ? `ID vinculado: <b>${esc(me.pokemon_id)}</b>` : 'Aún no vinculas tu ID de jugador.'}</p>
+            <p class="muted id-line"><span>Pokémon: ${me.pokemon_id ? `<b>${esc(me.pokemon_id)}</b>` : '<i>sin vincular</i>'}</span>
+              <span>KONAMI: ${currentUser.konami_id ? `<b>${esc(currentUser.konami_id)}</b>` : '<i>sin vincular</i>'}</span></p>
           </div>
           <div class="stat-row">
             <div class="tstat win"><b>${o.wins}</b><span>Victorias</span></div>
@@ -1375,7 +1377,10 @@ async function viewTournaments() {
           </div>
         </div>
         <p class="streak-line"><b>Racha actual:</b> ${streakText(o)} ${pills(o.last)}</p>
-        ${pokemonIdForm(me.pokemon_id)}
+        <div class="id-forms">
+          <div>${pokemonIdForm(me.pokemon_id)}</div>
+          <div>${konamiIdForm(currentUser.konami_id || '')}</div>
+        </div>
       </div>
       ${me.active.length ? `<h2>⚔ Tus partidas ahora</h2><div class="vs-list">${me.active.map(m => vsCard(m, m.tournament)).join('')}</div>` : ''}
       ${me.history.length ? `
@@ -1395,6 +1400,7 @@ async function viewTournaments() {
     ${section('Terminados', group('finished'), 'Aún no hay torneos terminados.')}`;
 
   bindPokemonIdForm(viewTournaments);
+  bindKonamiIdForm(viewTournaments);
 }
 
 // Campos de configuración (crear y editar)
@@ -1484,9 +1490,10 @@ async function viewTournament(id) {
   const lastRound = {};
   for (const r of d.rounds) lastRound[r.category || ''] = Math.max(lastRound[r.category || ''] || 0, r.round);
   const r_isTop = (round) => d.rounds.some(r => r.round === round && r.topcut);
+  const editRounds = viewTournament.editing?.id === id ? viewTournament.editing.rounds : new Set();
   const resultCell = (m, round) => {
     if (m.bye) return '<span class="badge cond">Bye</span>';
-    if (!isTdf && d.can_manage && t.status !== 'registration') {
+    if (!isTdf && d.can_manage && t.status !== 'registration' && (editRounds.has(round) || (round === t.current_round && t.status === 'running'))) {
       const opts = [['', 'Pendiente'], ['p1', `Gana ${m.player1.display_name}`], ['p2', `Gana ${m.player2.display_name}`],
         ...(r_isTop(round) ? [] : [...(d.rules?.ties ? [['tie', 'Empate']] : []), ['dl', 'Doble derrota']])];
       return `<select data-res="${round}/${m.table_no}" class="${m.result ? 'done' : ''}">
@@ -1519,6 +1526,8 @@ async function viewTournament(id) {
     </div>
     <div class="error" id="err"></div>
 
+    ${!isTdf && t.status === 'running' && d.timer ? timerPanel(d, id) : ''}
+
     ${currentUser && !isTdf && t.status === 'registration' && !me.joined && d.tournament.config?.require_id !== false
       && !(d.rules?.game === 'yugioh' ? currentUser.konami_id : currentUser.pokemon_id)
       ? `<div class="panel">${d.rules?.game === 'yugioh' ? konamiIdForm('') : pokemonIdForm('')}</div>` : ''}
@@ -1536,9 +1545,9 @@ async function viewTournament(id) {
         </div>
         ${!isTdf ? `<form class="my-deck-form" id="myDeckForm">
           <label>🃏 Mi deck en este torneo <span class="card-meta">(alimenta el metajuego de la página)</span></label>
-          <div class="search-row"><input name="deck" list="tDeckNames" maxlength="60" value="${esc(me.deck || '')}" placeholder="ej. Dragapult Dusknoir">
+          <div class="search-row"><select name="deck_id" id="myDeckSel"><option value="">Cargando tus decks…</option></select>
             <button class="btn small" type="submit">Guardar</button></div>
-          <datalist id="tDeckNames"></datalist>
+          <p class="card-meta" id="myDeckHint">${me.deck ? `Registrado: <b>${esc(me.deck)}</b>` : 'Elige uno de tus decks guardados.'}</p>
         </form>` : ''}
       </div>` : ''}
 
@@ -1558,7 +1567,9 @@ async function viewTournament(id) {
     ${d.can_manage && !isTdf ? organizerPanel(d) : ''}
 
     ${d.rounds.length ? [...d.rounds].reverse().map(r => `
-      <h2>${esc(r.label || `Ronda ${r.round}`)}${multiCat ? ` · ${esc(r.category)}` : ''}${r.round === lastRound[r.category || ''] && t.status === 'running' ? ' <span class="badge t-running">en curso</span>' : ''}</h2>
+      <div class="round-head"><h2>${esc(r.label || `Ronda ${r.round}`)}${multiCat ? ` · ${esc(r.category)}` : ''}${r.round === lastRound[r.category || ''] && t.status === 'running' ? ' <span class="badge t-running">en curso</span>' : ''}</h2>
+        ${!isTdf && d.can_manage && !(r.round === t.current_round && t.status === 'running')
+          ? `<button type="button" class="btn small ${editRounds.has(r.round) ? 'primary' : ''}" data-edit-round="${r.round}">${editRounds.has(r.round) ? '✔ Listo' : '✏️ Corregir resultados'}</button>` : ''}</div>
       <div class="panel" style="overflow-x:auto">
         <table class="mine pairings"><thead><tr><th>Mesa</th><th>Jugador 1</th><th></th><th>Jugador 2</th><th>Resultado</th></tr></thead>
         <tbody>${r.matches.map(m => `<tr class="${[m.player1, m.player2].some(isMe) ? 'mine-row' : ''}">
@@ -1592,10 +1603,21 @@ async function viewTournament(id) {
   // Mi deck en este torneo (sugerencias: metajuego y mis decks guardados)
   const deckForm = document.getElementById('myDeckForm');
   if (deckForm) {
-    deckSuggestions().then(names => { document.getElementById('tDeckNames').innerHTML = names.map(n => `<option value="${esc(n)}">`).join(''); });
+    const game = d.rules?.game || 'pokemon';
+    api('/api/decks').then(({ decks }) => {
+      const mine = decks.filter(x => x.game === game);
+      const sel = document.getElementById('myDeckSel');
+      if (!mine.length) {
+        sel.innerHTML = '<option value="">No tienes decks de este juego</option>'; sel.disabled = true;
+        document.getElementById('myDeckHint').innerHTML = `${me.deck ? `Registrado: <b>${esc(me.deck)}</b> · ` : ''}<a href="#/decks/nuevo">Arma y guarda tu deck</a> para poder registrarlo.`;
+        deckForm.querySelector('button').disabled = true;
+        return;
+      }
+      sel.innerHTML = `<option value="">— Elige tu deck —</option>${mine.map(x => `<option value="${esc(x.id)}" ${x.name === me.deck ? 'selected' : ''}>${esc(x.name)} · ${x.summary.total} cartas${x.summary.valid ? ' ✔' : ''}</option>`).join('')}`;
+    }).catch(() => { document.getElementById('myDeckSel').innerHTML = '<option value="">No se pudieron cargar tus decks</option>'; });
     deckForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      try { await api(`/api/tournaments/${id}/deck`, { method: 'PUT', body: { deck: deckForm.deck.value } }); toast('Deck guardado'); reload(); }
+      try { await api(`/api/tournaments/${id}/deck`, { method: 'PUT', body: { deck_id: deckForm.deck_id.value } }); toast('Deck registrado'); reload(); }
       catch (err) { document.getElementById('err').textContent = err.message; }
     });
   }
@@ -1626,9 +1648,96 @@ async function viewTournament(id) {
       toast('Resultado guardado'); reload();
     } catch (err) { document.getElementById('err').textContent = err.message; }
   }));
+  $app.querySelectorAll('[data-edit-round]').forEach(b => b.addEventListener('click', () => {
+    if (viewTournament.editing?.id !== id) viewTournament.editing = { id, rounds: new Set() };
+    const r = Number(b.dataset.editRound);
+    viewTournament.editing.rounds.has(r) ? viewTournament.editing.rounds.delete(r) : viewTournament.editing.rounds.add(r);
+    reload();
+  }));
   bindPokemonIdForm(reload);
   bindKonamiIdForm(reload);
   if (d.can_manage && !isTdf) bindOrganizer(d, id, reload);
+  if (!isTdf && t.status === 'running' && d.timer) bindTimer(d, id, reload);
+}
+
+// ---------- Reloj de la ronda ----------
+function timerControls(d) {
+  if (!d.can_manage) return '';
+  const min = d.tournament.config?.round_minutes || 50;
+  return `<div class="timer-controls">
+    <button type="button" class="btn small primary only-idle" data-tact="start">▶ Iniciar ${min} min</button>
+    <button type="button" class="btn small only-running" data-tact="pause">⏸ Pausar</button>
+    <button type="button" class="btn small primary only-paused" data-tact="resume">▶ Reanudar</button>
+    <button type="button" class="btn small not-idle not-ended" data-tact="add" data-min="-1">−1 min</button>
+    <button type="button" class="btn small not-idle" data-tact="add" data-min="1">+1 min</button>
+    <button type="button" class="btn small not-idle" data-tact="add" data-min="5">+5 min</button>
+    <button type="button" class="btn small not-idle" data-tact="start" data-confirm="1">↺ Reiniciar</button>
+  </div>`;
+}
+const alertsLabel = () => alertsEnabled() ? '🔔 Avisos activados' : '🔕 Activar avisos';
+
+function timerPanel(d, id) {
+  const t = d.tournament;
+  return `<div class="panel timer-panel" data-timer-host data-state="${d.timer.status}">
+    <div class="tp-head">
+      <div><h2>⏱ ${t.phase === 'top' ? 'Top cut · ' : ''}Ronda ${t.current_round}</h2>
+        <p class="card-meta">${d.timer.status === 'idle' ? 'El reloj arranca al generar la ronda.' : 'Al llegar a cero suena una alarma en los teléfonos con los avisos activados.'}</p></div>
+      <div class="tp-links">
+        <button type="button" class="btn small" data-alerts>${alertsLabel()}</button>
+        <a class="btn small" href="#/torneo/${id}/reloj">🖥 Pantalla grande</a>
+      </div>
+    </div>
+    ${clockHTML()}
+    ${timerControls(d)}
+  </div>`;
+}
+
+function bindTimer(d, id, reload) {
+  const t = d.tournament;
+  startRoundTimer({ id, timer: d.timer, serverNow: d.server_now, game: d.rules?.game || 'pokemon', name: t.name,
+                    round: t.current_round, onRoundChange: reload });
+  $app.querySelectorAll('[data-alerts]').forEach(b => b.addEventListener('click', async () => {
+    if (alertsEnabled()) { disableAlerts(); toast('Avisos desactivados'); }
+    else {
+      await enableAlerts();
+      toast('Notification' in window && Notification.permission === 'denied'
+        ? 'Sonará la alarma, pero el navegador bloqueó las notificaciones' : 'Te avisaremos a los 5 minutos y al terminar la ronda');
+    }
+    $app.querySelectorAll('[data-alerts]').forEach(x => { x.textContent = alertsLabel(); });
+  }));
+  $app.querySelectorAll('[data-tact]').forEach(b => b.addEventListener('click', async () => {
+    if (b.dataset.confirm && !confirm('¿Reiniciar el reloj de la ronda desde el tiempo completo?')) return;
+    b.disabled = true;
+    try {
+      const r = await api(`/api/tournaments/${id}/timer`, { method: 'POST', body: { action: b.dataset.tact, minutes: Number(b.dataset.min) || undefined } });
+      applyTimer(r);
+    } catch (err) { toast(err.message); }
+    b.disabled = false;
+  }));
+}
+
+// Reloj a pantalla completa para proyectarlo en la tienda
+async function viewTournamentClock(id) {
+  const d = await api(`/api/tournaments/${id}`);
+  const t = d.tournament;
+  if (t.source === 'tdf' || t.status !== 'running' || !d.timer) {
+    $app.innerHTML = `<div class="empty">El reloj aparece cuando el torneo tiene una ronda en curso. <br><a href="#/torneo/${id}">Volver al torneo</a></div>`;
+    return;
+  }
+  document.body.classList.add('clock-mode');
+  window.addEventListener('hashchange', () => document.body.classList.remove('clock-mode'), { once: true });
+  $app.innerHTML = `<div class="big-clock" data-timer-host data-state="${d.timer.status}">
+    <div class="bc-top"><a href="#/torneo/${id}">← ${esc(t.name)}</a>
+      <div class="tp-links"><button type="button" class="btn small" data-alerts>${alertsLabel()}</button>
+        <button type="button" class="btn small" id="fullscreen">⛶ Pantalla completa</button></div></div>
+    <h1>${t.phase === 'top' ? 'Top cut · ' : ''}Ronda ${t.current_round}${t.rounds && t.phase !== 'top' ? ` <span>de ${t.rounds}</span>` : ''}</h1>
+    ${clockHTML({ big: true })}
+    ${timerControls(d)}
+  </div>`;
+  document.getElementById('fullscreen').addEventListener('click', () => {
+    document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.().catch(() => {});
+  });
+  bindTimer(d, id, () => viewTournamentClock(id));
 }
 
 // ---------- Panel de organizador (torneos de la app) ----------
@@ -1671,7 +1780,7 @@ function organizerPanel(d) {
           <select id="swapA">${curPlayers.map(p => `<option value="${esc(p.user_id)}">${esc(p.display_name)}</option>`).join('')}</select>
           <span>con</span><select id="swapB">${curPlayers.map((p, i) => `<option value="${esc(p.user_id)}" ${i === 1 ? 'selected' : ''}>${esc(p.display_name)}</option>`).join('')}</select>
           <button class="btn small" id="swap">Intercambiar</button></div>` : ''}
-        <p class="card-meta">También puedes corregir el resultado de cualquier ronda directamente en su tabla; la clasificación se recalcula sola.</p>
+        <p class="card-meta">Para cambiar el resultado de una ronda pasada, usa el botón <b>✏️ Corregir resultados</b> junto a esa ronda; la clasificación se recalcula sola.</p>
       </details>` : ''}
       ${t.status !== 'finished' ? `
       <div class="add-player">
@@ -3142,7 +3251,7 @@ async function route(parts, params) {
       case 'editar': return await viewListingForm(parts[1]);
       case 'perfil': return viewProfile();
       case 'torneos': return parts[1] === 'nuevo' ? viewTournamentForm() : parts[1] === 'importar' ? viewTdfImport() : await viewTournaments();
-      case 'torneo': return await viewTournament(parts[1]);
+      case 'torneo': return parts[2] === 'reloj' ? await viewTournamentClock(parts[1]) : await viewTournament(parts[1]);
       case 'admin': return await viewAdmin(params);
       case 'competitivo':
         if (parts[1] === 'oficiales' || parts[1] === 'online') return await viewCompEvents(parts[1]);
