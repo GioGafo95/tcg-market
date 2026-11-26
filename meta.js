@@ -116,10 +116,10 @@ async function fetchOnline() {
 }
 
 // % de victorias de cada deck contra cada otro (partidas online, sin espejos). Victoria = 1, empate = 1/2.
-export function matchupMatrix(online, top = 10) {
+export function matchupMatrix(online, top = 10, extended = 25) {
   const usage = new Map();
   online.forEach(t => t.standings.forEach(s => usage.set(s.deck.id, (usage.get(s.deck.id) || { deck: s.deck, n: 0 })) && usage.get(s.deck.id).n++));
-  const decks = [...usage.values()].sort((a, b) => b.n - a.n).slice(0, top).map(x => x.deck);
+  const decks = [...usage.values()].sort((a, b) => b.n - a.n).slice(0, extended).map(x => x.deck);
   const ids = new Set(decks.map(d => d.id));
   const cells = {};
   for (const t of online) {
@@ -141,7 +141,8 @@ export function matchupMatrix(online, top = 10) {
     const g = c.w + c.l + c.t;
     (out[a.id] ??= {})[b.id] = { games: g, wr: Math.round((c.w + c.t / 2) / g * 1000) / 10 };
   }
-  return { decks: decks.map(d => ({ key: d.id, name: d.name, icons: d.icons })), cells: out };
+  const pub = d => ({ key: d.id, name: d.name, icons: d.icons });
+  return { decks: decks.slice(0, top).map(pub), all: decks.map(pub), cells: out };
 }
 
 // ---------- Agregación ----------

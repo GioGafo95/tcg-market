@@ -1615,3 +1615,52 @@ body.clock-mode .topbar, body.clock-mode .tabbar, body.clock-mode .match-banner 
 .event-link b { color: #7c3aed; white-space: nowrap; }
 .event-link:hover { background: #ebe0ff; border-color: #cdb6f7; transform: translateY(-1px); }
 .event-link:focus-visible { outline: 3px solid var(--violet); outline-offset: 2px; }
+
+/* ---------- Comparador de enfrentamientos ---------- */
+.mu-finder .muf-pick { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: .6rem; align-items: end; }
+.muf-pick label { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+.muf-pick label span { font-size: .78rem; font-weight: 800; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
+.muf-swap { width: 42px; height: 42px; border-radius: 50%; border: 1px solid #e0d3f7; background: #f4edff; color: #7c3aed;
+  font-size: 1.15rem; font-weight: 900; cursor: pointer; transition: transform .2s, background .15s; }
+.muf-swap:hover { background: #ebe0ff; transform: rotate(180deg); }
+.muf-swap:focus-visible { outline: 3px solid var(--violet); outline-offset: 2px; }
+#mufResult { margin-top: 1.1rem; }
+.muf-empty { padding: 1rem; border-radius: 14px; background: #f7f2ff; color: var(--ink-soft); text-align: center; }
+.muf-duel { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: .8rem; }
+.muf-side { display: flex; align-items: center; gap: .5rem; min-width: 0; color: var(--ink); }
+.muf-side.right { flex-direction: row-reverse; text-align: right; }
+.muf-side b { font-family: var(--font-title); font-weight: 600; font-size: 1.05rem; line-height: 1.15; overflow-wrap: break-word; min-width: 0; }
+.muf-side .deck-icons img, .muf-side .ygo-face { width: 40px; height: 40px; }
+.muf-score { text-align: center; padding: .5rem 1rem; border-radius: 16px; min-width: 120px; }
+.muf-score strong { display: block; font-family: var(--font-title); font-size: 2.2rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.muf-score span { font-size: .78rem; font-weight: 800; }
+.muf-score.good2 { background: #9fe0bf; color: #0b5a37; } .muf-score.good { background: #d9f3e6; color: #11663f; }
+.muf-score.even { background: #f1ebfb; color: var(--ink); }
+.muf-score.bad { background: #fde0e5; color: #9b1c33; } .muf-score.bad2 { background: #f7a9b7; color: #7a0f22; }
+.muf-bar { display: flex; height: 12px; border-radius: 999px; overflow: hidden; margin-top: 1rem; background: #efe7fb; gap: 2px; }
+.muf-bar i { display: block; height: 100%; }
+.muf-bar .win { background: #1baf7a; border-radius: 999px 0 0 999px; }
+.muf-bar .loss { background: #e8677e; border-radius: 0 999px 999px 0; }
+.muf-bar-labels { display: flex; justify-content: space-between; font-size: .75rem; font-weight: 800; color: var(--ink-soft); margin-top: .25rem; }
+.muf-text { margin: .7rem 0 0; color: var(--ink); }
+.muf-turns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; margin-top: .8rem; }
+.muf-turns > div { padding: .55rem .8rem; border-radius: 12px; background: #f7f2ff; display: flex; justify-content: space-between; align-items: center; }
+.muf-turns span { font-size: .82rem; font-weight: 700; color: var(--ink-soft); }
+.muf-turns b, .muf-lists li b { font-family: var(--font-title); font-weight: 700; }
+.mu-finder .good2, .mu-finder .good { color: #11663f; } .mu-finder .bad2, .mu-finder .bad { color: #b4233d; }
+.mu-finder .muf-score.good2, .mu-finder .muf-score.good { color: #0b5a37; } .mu-finder .muf-score.bad, .mu-finder .muf-score.bad2 { color: #8a1a2e; }
+.muf-warn { margin: .6rem 0 0; font-size: .85rem; color: #9a5b00; }
+.muf-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1.2rem; padding-top: 1rem; border-top: 1px solid #eee5fa; }
+.muf-lists h3 { margin: 0 0 .4rem; font-size: .92rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.muf-lists ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; }
+.muf-lists button { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .5rem;
+  padding: .35rem .5rem; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: inherit; font-size: .88rem; font-weight: 700; text-align: left; cursor: pointer; }
+.muf-lists button:hover { background: #f4edff; }
+.muf-lists .deck-icons { min-width: 44px; } .muf-lists .deck-icons img, .muf-lists .ygo-face { width: 26px; height: 26px; }
+td.mu[data-mu-a] { cursor: pointer; }
+td.mu[data-mu-a]:hover { outline: 2px solid var(--violet); outline-offset: -2px; }
+@media (max-width: 640px) {
+  .muf-duel { grid-template-columns: 1fr; text-align: center; }
+  .muf-side, .muf-side.right { flex-direction: column; text-align: center; }
+  .muf-lists { grid-template-columns: 1fr; }
+}

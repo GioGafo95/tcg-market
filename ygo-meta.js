@@ -82,19 +82,22 @@ async function fetchOmegaLadder() {
 // ---------- Omega: enfrentamientos entre los arquetipos principales ----------
 async function fetchOmegaMatchups(decks) {
   const top = decks.slice(0, OMEGA_MATCHUP_DECKS);
-  const names = new Set(top.map(d => d.name));
+  const ladder = new Map(decks.map(d => [d.name, d]));
   const pages = await pool(top, 2, d => get(`${OMEGA}/statistics/archetypes/${encodeURIComponent(d.key)}?ladder=tcg`, 'html'));
   const cells = {};
   top.forEach((d, i) => {
     if (!pages[i]) return;
     const list = jsonArrayAfter(nextPayload(pages[i]), 'matchups') || [];
     for (const m of list) {
-      if (!names.has(m.opponentName) || m.opponentName === d.name || !m.games) continue;
+      if (!ladder.has(m.opponentName) || m.opponentName === d.name || !m.games) continue;
       (cells[d.name] ??= {})[m.opponentName] = { games: m.games, wr: r1((m.wrRaw ?? m.wins / m.games) * 100),
         first: m.firstWr != null ? r1(m.firstWr * 100) : null, second: m.secondWr != null ? r1(m.secondWr * 100) : null };
     }
   });
-  return { decks: top.map(d => ({ name: d.name, face: d.face })), cells };
+  // Todos los arquetipos con algún dato (los 8 principales y sus rivales), en el orden de la ladder
+  const seen = new Set([...Object.keys(cells), ...Object.values(cells).flatMap(c => Object.keys(c))]);
+  const all = decks.filter(d => seen.has(d.name)).map(d => ({ name: d.name, face: d.face }));
+  return { decks: top.map(d => ({ name: d.name, face: d.face })), all, cells };
 }
 
 // ---------- YGOPRODeck: listas de torneos ----------

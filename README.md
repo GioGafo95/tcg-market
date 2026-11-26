@@ -77,6 +77,9 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
     próximos torneos (uso ponderado por antigüedad, tendencia y fuerza de conversión), además de la **matriz de
     enfrentamientos** (% de victorias de cada deck contra cada otro, de los emparejamientos de los torneos online).
     Lógica en [meta.js](meta.js).
+  - **Comparador de enfrentamientos** (encima de cada matriz, Pokémon y Yu-Gi-Oh!): eliges tu deck y el rival y muestra
+    su % de victorias, partidas, % yendo primero/segundo (YGO) y los mejores y peores enfrentamientos de tu deck. Cubre
+    los 25 decks más usados de Pokémon y los 8 arquetipos principales de Omega contra todos sus rivales.
     La "foto" del metajuego se guarda en la base de datos y se rehace con `POST /api/meta/refresh` (solo si tiene más de
     5 h); lo llama la tarea programada [meta-refresh.yml](.github/workflows/meta-refresh.yml) cada 6 h y el despliegue.
     Las visitas nunca esperan a Limitless.

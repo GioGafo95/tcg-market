@@ -2425,7 +2425,7 @@ async function viewMeta(params) {
       ${lineChart('metaChart', { labels: weeks.map(fmtShort), series: top6.map(d => ({ name: d.name, values: weeks.map(w => d.weekly.find(p => p.week === w)?.share ?? null) })) })}
     </section>` : ''}
 
-    ${src !== 'macai' && m.online?.matchups?.decks?.length ? matchupMatrix({ decks: m.online.matchups.decks, cells: m.online.matchups.cells,
+    ${src !== 'macai' && m.online?.matchups?.decks?.length ? matchupMatrix({ decks: m.online.matchups.decks, all: m.online.matchups.all, cells: m.online.matchups.cells, game: 'pokemon',
       keyOf: d => d.key, iconOf: d => deckIcons(d, sprites), note: 'Partidas de torneos online de Limitless (sin espejos) · pasa el cursor para ver el detalle' }) : ''}
 
     <section class="panel">
@@ -2451,28 +2451,117 @@ async function viewMeta(params) {
   document.getElementById('srcSel').addEventListener('click', e => {
     const b = e.target.closest('[data-src]'); if (b) go(`#/competitivo?fuente=${b.dataset.src}`);
   });
+  bindMatchupFinder();
   document.getElementById('deckFilter')?.addEventListener('input', e => {
     const q = e.target.value.trim().toLowerCase();
     $app.querySelectorAll('.meta-table tbody tr').forEach(tr => { tr.hidden = q && !tr.dataset.name.includes(q); });
   });
 }
 
+// ---------- Comparador de enfrentamientos: tu deck contra un rival ----------
+let muState = null;
+// % de A contra B: dato directo o, si solo existe el contrario, su complemento
+function muLookup(a, b) {
+  const { cells } = muState;
+  const d = cells?.[a]?.[b];
+  if (d) return { ...d, direct: true };
+  const r = cells?.[b]?.[a];
+  if (r) return { games: r.games, wr: Math.round((100 - r.wr) * 10) / 10, first: r.second != null ? Math.round((100 - r.second) * 10) / 10 : null,
+                  second: r.first != null ? Math.round((100 - r.first) * 10) / 10 : null, direct: false };
+  return null;
+}
+const muTone = wr => { const d = wr - 50; return Math.abs(d) < 3 ? 'even' : d > 0 ? (d >= 10 ? 'good2' : 'good') : (d <= -10 ? 'bad2' : 'bad'); };
+const MU_VERDICT = { good2: 'Muy favorable', good: 'Favorable', even: 'Parejo', bad: 'Desfavorable', bad2: 'Muy desfavorable' };
+
+function matchupFinderHTML() {
+  const { all, keyOf, game } = muState;
+  const saved = JSON.parse(sessionStorage.getItem(`muPick:${game}`) || 'null');
+  const has = k => all.some(d => keyOf(d) === k);
+  const a = saved && has(saved.a) ? saved.a : keyOf(all[0]);
+  const b = saved && has(saved.b) && saved.b !== a ? saved.b : keyOf(all.find(d => keyOf(d) !== a) || all[0]);
+  const opts = sel => all.map(d => `<option value="${esc(keyOf(d))}" ${keyOf(d) === sel ? 'selected' : ''}>${esc(d.name)}</option>`).join('');
+  return `<section class="panel mu-finder" id="muFinder">
+    <div class="panel-title"><h2>🎯 ¿Qué tan bien le va a tu deck?</h2><span class="card-meta">Elige tu deck y el rival · ${all.length} decks con datos</span></div>
+    <div class="muf-pick">
+      <label><span>Tu deck</span><select id="mufA">${opts(a)}</select></label>
+      <button type="button" class="muf-swap" id="mufSwap" title="Intercambiar" aria-label="Intercambiar decks">⇄</button>
+      <label><span>Contra</span><select id="mufB">${opts(b)}</select></label>
+    </div>
+    <div id="mufResult" aria-live="polite"></div>
+  </section>`;
+}
+
+function renderMatchupFinder() {
+  const { all, keyOf, iconOf, minGames, game } = muState;
+  const A = document.getElementById('mufA'), B = document.getElementById('mufB'), out = document.getElementById('mufResult');
+  if (!A || !out) return;
+  const a = all.find(d => keyOf(d) === A.value), b = all.find(d => keyOf(d) === B.value);
+  sessionStorage.setItem(`muPick:${game}`, JSON.stringify({ a: A.value, b: B.value }));
+  let main;
+  if (a === b) main = '<div class="muf-empty">Es un espejo: el mismo deck de los dos lados (50 %).</div>';
+  else {
+    const r = muLookup(keyOf(a), keyOf(b));
+    if (!r) main = `<div class="muf-empty">Todavía no hay partidas registradas de <b>${esc(a.name)}</b> contra <b>${esc(b.name)}</b>.</div>`;
+    else {
+      const tone = muTone(r.wr);
+      main = `<div class="muf-duel">
+        <div class="muf-side">${iconOf(a)}<b>${esc(a.name)}</b></div>
+        <div class="muf-score ${tone}"><strong>${r.wr.toFixed(1)}%</strong><span>${MU_VERDICT[tone]}</span></div>
+        <div class="muf-side right">${iconOf(b)}<b>${esc(b.name)}</b></div>
+      </div>
+      <div class="muf-bar" role="img" aria-label="${esc(a.name)} ${r.wr}% contra ${esc(b.name)} ${(100 - r.wr).toFixed(1)}%">
+        <i class="win" style="width:${r.wr}%"></i><i class="loss" style="width:${100 - r.wr}%"></i></div>
+      <div class="muf-bar-labels"><span>${r.wr.toFixed(1)}%</span><span>${(100 - r.wr).toFixed(1)}%</span></div>
+      <p class="muf-text">De cada 10 partidas, <b>${esc(a.name)}</b> gana unas <b>${Math.round(r.wr / 10)}</b> contra <b>${esc(b.name)}</b> ·
+        ${r.games.toLocaleString('es-MX')} partidas${r.direct ? '' : ' (calculado desde el lado del rival)'}.</p>
+      ${r.first != null && r.games >= minGames ? `<div class="muf-turns"><div><span>Yendo primero</span><b class="${muTone(r.first)}">${r.first.toFixed(1)}%</b></div>
+        <div><span>Yendo segundo</span><b class="${muTone(r.second)}">${r.second.toFixed(1)}%</b></div></div>` : ''}
+      ${r.games < minGames ? `<p class="muf-warn">⚠ Solo ${r.games} partidas: tómalo como tendencia, no como dato firme.</p>` : ''}`;
+    }
+  }
+  // Mejores y peores enfrentamientos del deck elegido (con suficientes partidas)
+  const rows = all.filter(d => d !== a).map(d => ({ d, r: muLookup(keyOf(a), keyOf(d)) })).filter(x => x.r && x.r.games >= minGames);
+  const best = [...rows].sort((x, y) => y.r.wr - x.r.wr).slice(0, 4);
+  const worst = [...rows].sort((x, y) => x.r.wr - y.r.wr).filter(x => !best.includes(x)).slice(0, 4);
+  const list = (items, title) => `<div><h3>${title}</h3>${items.length ? `<ul>${items.map(({ d, r }) => `
+    <li><button type="button" data-muf-pick="${esc(keyOf(d))}">${iconOf(d)}<span class="one-line">${esc(d.name)}</span><b class="${muTone(r.wr)}">${Math.round(r.wr)}%</b></button></li>`).join('')}</ul>`
+    : '<p class="card-meta">Sin datos suficientes.</p>'}</div>`;
+  out.innerHTML = `${main}<div class="muf-lists">${list(best, `✅ Donde mejor le va a ${esc(a.name)}`)}${list(worst, `⛔ Donde peor le va`)}</div>`;
+  out.querySelectorAll('[data-muf-pick]').forEach(btn => btn.addEventListener('click', () => { B.value = btn.dataset.mufPick; renderMatchupFinder(); }));
+}
+
+function bindMatchupFinder() {
+  if (!muState || !document.getElementById('muFinder')) return;
+  const A = document.getElementById('mufA'), B = document.getElementById('mufB');
+  A.addEventListener('change', renderMatchupFinder);
+  B.addEventListener('change', renderMatchupFinder);
+  document.getElementById('mufSwap').addEventListener('click', () => { [A.value, B.value] = [B.value, A.value]; renderMatchupFinder(); });
+  $app.querySelectorAll('[data-mu-a]').forEach(td => td.addEventListener('click', () => {
+    A.value = td.dataset.muA; B.value = td.dataset.muB; renderMatchupFinder();
+    document.getElementById('muFinder').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  renderMatchupFinder();
+}
+
 // % de victorias de cada deck (fila) contra cada rival (columna). Verde = favorable, rojo = desfavorable.
 // Con pocas partidas el número se atenúa (menos confiable).
-function matchupMatrix({ decks, cells, keyOf, iconOf, minGames = 10, note }) {
+function matchupMatrix({ decks, all, cells, keyOf, iconOf, minGames = 10, note, game = 'pokemon' }) {
   if (!decks?.length) return '';
+  all = all?.length ? all : decks;
+  muState = { all, cells, keyOf, iconOf, minGames, game };
   const cell = (a, b) => {
     if (keyOf(a) === keyOf(b)) return '<td class="mu mirror" title="Espejo">—</td>';
     const c = cells?.[keyOf(a)]?.[keyOf(b)];
     if (!c) return '<td class="mu none">·</td>';
     const diff = c.wr - 50;
     const tone = Math.abs(diff) < 3 ? 'even' : diff > 0 ? (diff >= 10 ? 'good2' : 'good') : (diff <= -10 ? 'bad2' : 'bad');
-    return `<td class="mu ${tone}${c.games < minGames ? ' low' : ''}" title="${esc(a.name)} contra ${esc(b.name)}: ${c.wr}% en ${c.games} partidas${c.first != null ? ` · yendo 1.º ${c.first}% / 2.º ${c.second}%` : ''}">
+    return `<td class="mu ${tone}${c.games < minGames ? ' low' : ''}" data-mu-a="${esc(keyOf(a))}" data-mu-b="${esc(keyOf(b))}" title="${esc(a.name)} contra ${esc(b.name)}: ${c.wr}% en ${c.games} partidas${c.first != null ? ` · yendo 1.º ${c.first}% / 2.º ${c.second}%` : ''}">
       <b>${Math.round(c.wr)}%</b><small>${c.games}</small></td>`;
   };
   return `
+    ${matchupFinderHTML()}
     <section class="panel">
-      <div class="panel-title"><h2>⚔️ Enfrentamientos: % de victorias</h2><span class="card-meta">${note}</span></div>
+      <div class="panel-title"><h2>⚔️ Enfrentamientos: % de victorias</h2><span class="card-meta">${note} · toca una casilla para verla en el comparador</span></div>
       <div class="table-wrap"><table class="mu-table">
         <thead><tr><th class="mu-corner">Deck ＼ Rival</th>${decks.map(b => `<th title="${esc(b.name)}"><div class="mu-head">${iconOf(b)}<span>${esc(b.name)}</span></div></th>`).join('')}</tr></thead>
         <tbody>${decks.map(a => `<tr><th class="mu-row"><div class="deck-cell">${iconOf(a)}<b>${esc(a.name)}</b></div></th>${decks.map(b => cell(a, b)).join('')}</tr>`).join('')}</tbody>
@@ -2553,7 +2642,7 @@ async function viewYgoMeta(params) {
         ${tiers.map(g => `<div class="tier-row"><div class="tier-label t${g.t}">T${g.t}</div><div class="tier-decks">${g.list.map(d => `
           <div class="tier-deck" title="${esc(d.name)}">${ygoFace(d.face, img, d.name)}<b class="one-line">${esc(d.name)}</b><small>${pct(d.share)} · WR ${pct(d.winrate)}</small></div>`).join('')}</div></div>`).join('')}
       </section>` : ''}
-      ${L.matchups?.decks?.length ? matchupMatrix({ decks: L.matchups.decks, cells: L.matchups.cells, keyOf: d => d.name,
+      ${L.matchups?.decks?.length ? matchupMatrix({ decks: L.matchups.decks, all: L.matchups.all, cells: L.matchups.cells, game: 'yugioh', keyOf: d => d.name,
         iconOf: d => ygoFace(d.face, img, d.name), minGames: 30, note: 'Partidas de la ladder TCG de YGO Omega (8 arquetipos principales) · incluye % yendo primero y segundo' }) : ''}
       <section class="panel"><div class="panel-title"><h2>Ranking de arquetipos</h2><input type="search" id="deckFilter" class="mini-search" placeholder="Filtrar…" aria-label="Filtrar arquetipo"></div>
         <div class="table-wrap"><table class="meta-table"><thead><tr><th>#</th><th>Arquetipo</th><th>Uso</th><th>Tier</th>
@@ -2598,6 +2687,7 @@ async function viewYgoMeta(params) {
     </div>
     ${body}`;
   document.getElementById('srcSel').addEventListener('click', e => { const b = e.target.closest('[data-src]'); if (b) go(`#/competitivo/yugioh?fuente=${b.dataset.src}`); });
+  bindMatchupFinder();
   document.getElementById('deckFilter')?.addEventListener('input', e => {
     const q = e.target.value.trim().toLowerCase();
     $app.querySelectorAll('.meta-table tbody tr').forEach(tr => { tr.hidden = q && !tr.dataset.name.includes(q); });
