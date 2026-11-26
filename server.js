@@ -273,9 +273,24 @@ app.get('/api/listings', async (req, res) => {
     onlyAvailable: true,
     game: GAMES.includes(req.query.game) ? req.query.game : '',
     condition: CONDITIONS.includes(req.query.condition) ? req.query.condition : '',
+    set: str(req.query.set, 120),
     q: str(req.query.q, 100), seller: str(req.query.seller, 30), sort: str(req.query.sort, 20),
   });
   res.json({ listings: listings.map(l => listingOut(l, req.fx)) });
+});
+
+// Expansiones que tienen cartas en venta (para el filtro del catálogo), con cuántas publicaciones hay de cada una
+app.get('/api/listings/sets', async (req, res) => {
+  const game = GAMES.includes(req.query.game) ? req.query.game : '';
+  const listings = await repo.listListings({ onlyAvailable: true, game });
+  const counts = new Map();
+  for (const l of listings) {
+    const name = (l.set_name || '').trim();
+    if (name) counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  const sets = [...counts].map(([name, count]) => ({ name, count }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+  res.json({ sets });
 });
 
 app.get('/api/listings/mine', requireAuth, async (req, res) => {

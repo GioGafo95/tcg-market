@@ -215,6 +215,7 @@ export const repo = {
     if (f.onlyAvailable) where.push(`l.status = 'available'`, 'l.quantity > 0');
     if (f.game) { where.push('l.game = ?'); params.push(f.game); }
     if (f.condition) { where.push('l.condition = ?'); params.push(f.condition); }
+    if (f.set) { where.push('l.set_name = ? COLLATE NOCASE'); params.push(f.set); }
     if (f.userId) { where.push('l.user_id = ?'); params.push(f.userId); }
     if (f.seller) { where.push('u.username = ?'); params.push(f.seller); }
     if (f.q) {

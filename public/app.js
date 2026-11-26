@@ -178,11 +178,15 @@ function cardTile(l, { showSeller = true } = {}) {
 async function viewCatalog(params) {
   const game = params.get('game') || '';
   const q = params.get('q') || '';
-  const condition = params.get('condition') || '';
+  const set = params.get('set') || '';
   const sort = params.get('sort') || '';
 
-  const qs = new URLSearchParams({ game, q, condition, sort });
-  const [{ listings }, stats] = await Promise.all([api(`/api/listings?${qs}`), api('/api/stats')]);
+  const qs = new URLSearchParams({ game, q, set, sort });
+  const [{ listings }, stats, { sets }] = await Promise.all([
+    api(`/api/listings?${qs}`), api('/api/stats'), api(`/api/listings/sets?${new URLSearchParams({ game })}`),
+  ]);
+  // Si la expansión elegida ya no tiene cartas, se sigue mostrando en la lista para poder quitarla
+  if (set && !sets.some(s => s.name.toLowerCase() === set.toLowerCase())) sets.unshift({ name: set, count: 0 });
   const g = Object.fromEntries(stats.byGame.map(r => [r.game, r]));
   const pk = g.pokemon?.cards ?? 0, yg = g.yugioh?.cards ?? 0;
   const pct = (n) => (pk + yg ? Math.round((n / (pk + yg)) * 100) : 0);
@@ -224,10 +228,9 @@ async function viewCatalog(params) {
     </div>
     <form class="filters" id="filters">
       <input name="q" type="search" placeholder="Buscar por nombre, expansión o código…" value="${esc(q)}">
-      <select name="condition">
-        <option value="">Cualquier estado</option>
-        ${Object.entries(CONDITIONS).map(([k, v]) =>
-          `<option value="${k}" ${condition === k ? 'selected' : ''}>${k} — ${v}</option>`).join('')}
+      <select name="set" aria-label="Expansión">
+        <option value="">Todas las expansiones</option>
+        ${sets.map(s => `<option value="${esc(s.name)}" ${set.toLowerCase() === s.name.toLowerCase() ? 'selected' : ''}>${esc(s.name)} (${s.count})</option>`).join('')}
       </select>
       <select name="sort">
         ${[['', 'Más recientes'], ['price_asc', 'Precio: menor a mayor'], ['price_desc', 'Precio: mayor a menor'], ['name', 'Nombre A-Z']]
@@ -245,7 +248,8 @@ async function viewCatalog(params) {
     for (const [k, v] of [...next]) if (!v) next.delete(k);
     go(`#/?${next}`);
   };
-  $app.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => update({ game: b.dataset.game })));
+  // Al cambiar de juego se quita la expansión (las de Pokémon no existen en Yu-Gi-Oh! y viceversa)
+  $app.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => update({ game: b.dataset.game, set: '' })));
   const form = document.getElementById('filters');
   form.addEventListener('submit', e => { e.preventDefault(); update({}); });
   form.querySelectorAll('select').forEach(s => s.addEventListener('change', () => update({})));

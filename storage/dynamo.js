@@ -191,6 +191,7 @@ export const repo = {
     if (f.onlyAvailable) items = items.filter(l => l.status === 'available' && l.quantity > 0);
     if (f.game) items = items.filter(l => l.game === f.game);
     if (f.condition) items = items.filter(l => l.condition === f.condition);
+    if (f.set) items = items.filter(l => (l.set_name || '').toLowerCase() === f.set.toLowerCase());
     if (f.q) {
       const q = f.q.toLowerCase();
       items = items.filter(l => [l.card_name, l.set_name, l.card_code].some(v => (v || '').toLowerCase().includes(q)));

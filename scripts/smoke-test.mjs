@@ -32,6 +32,7 @@ const run = async () => {
   if (READONLY) {
     const s = await call('/api/stats', { expect: 200 }); ok(`estadísticas: ${JSON.stringify(s.data)}`);
     const c = await call('/api/listings', { expect: 200 }); ok(`catálogo: ${c.data.listings.length} cartas`);
+    const sets = await call('/api/listings/sets', { expect: 200 }); ok(`expansiones con cartas: ${sets.data.sets.length}`);
     await call('/api/auth/me', { expect: 200 }); ok('sesión (anónima)');
     await call('/api/listings/mine', { expect: 401 }); ok('rutas privadas protegidas');
     const tl = await call('/api/tournaments', { expect: 200 }); ok(`torneos: ${tl.data.tournaments.length}`);
