@@ -6,6 +6,8 @@ import { getUsdMxn, toMxn } from './fx.js';
 import { outcome, opponentOf, standings, pairRound, streaks } from './tournaments.js';
 import { parseTdf, TdfError, shortName } from './tdf.js';
 import { DECK_GAMES, SECTIONS, MAX_ENTRIES, MAX_QTY, deckSummary } from './public/deck-rules.js';
+import { buildSnapshot } from './meta.js';
+import { parseLog } from './public/ptcgl-log.js';
 
 const fxInfo = fx => (fx ? { rate: Math.round(fx.rate * 10000) / 10000, date: fx.date, source: fx.source } : null);
 
@@ -577,12 +579,13 @@ app.get('/api/tournaments/:id', async (req, res) => {
                   ...(L.tdf ? { organizer_tom: organizerName(tdf_data.organizer), categories: tdf_data.categories.map(c => c.label) } : {}) },
     can_manage: manage,
     // El ID de jugador solo lo ve quien organiza (para capturarlo en el reporte oficial)
-    players: players.map(p => ({ ...lite(p), user_id: pub(p.user_id), location: p.location, category: p.category,
+    players: players.map(p => ({ ...lite(p), user_id: pub(p.user_id), location: p.location, category: p.category, deck: p.deck || '',
                                  ...(manage ? { pokemon_id: p.pokemon_id } : {}) })),
     standings: table.map(({ opponents, ...r }) => ({ ...r, user_id: pub(r.user_id) })),
     rounds: [...rounds.values()].map(r => ({ ...r, label: roundLabel(r.round, r.topcut, r.matches.length) })),
     round_complete: matches.filter(m => m.round === t.current_round).every(m => m.result),
-    me: joined ? { joined, key: pub(key), match: hideOpponentId(L, currentMatch(L, key)), ...streaks(resultsIn(matches, key)) }
+    me: joined ? { joined, key: pub(key), deck: players.find(p => sameId(p.user_id, key))?.deck || '',
+                   match: hideOpponentId(L, currentMatch(L, key)), ...streaks(resultsIn(matches, key)) }
                : { joined: false },
   });
 });
@@ -632,6 +635,17 @@ app.post('/api/tournaments/:id/join', requireAuth, async (req, res) => {
   if (!req.user.pokemon_id) throw new HttpError(400, 'Vincula tu ID de jugador Pokémon antes de inscribirte.');
   await repo.joinTournament(t.id, req.user.id);
   res.json({ ok: true });
+});
+
+// Deck con el que juega el usuario en un torneo de la app (alimenta el metajuego de la página)
+app.put('/api/tournaments/:id/deck', requireAuth, async (req, res) => {
+  const t = await repo.getTournament(str(req.params.id, 40));
+  if (!t || t.source === 'tdf') throw new HttpError(404, 'Torneo no encontrado.');
+  const players = await repo.getTournamentPlayers(t.id);
+  if (!players.some(p => sameId(p.user_id, req.user.id))) throw new HttpError(400, 'Primero inscríbete en el torneo.');
+  const deck = str(req.body.deck, 60).replace(/\s+/g, ' ');
+  await repo.setTournamentDeck(t.id, req.user.id, deck);
+  res.json({ ok: true, deck });
 });
 
 app.post('/api/tournaments/:id/leave', requireAuth, async (req, res) => {
@@ -767,6 +781,149 @@ app.delete('/api/decks/:id', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Competitivo: metajuego ----------
+
+const META_KEY = 'meta-snapshot-v1';
+let metaBuilding = null;
+
+// Foto del metajuego. Las visitas siempre reciben la foto guardada (nunca esperan a Limitless); se rehace con
+// POST /api/meta/refresh, que llama una tarea programada cada 6 h. Solo si todavía no existe ninguna foto se arma al vuelo.
+const META_MIN_REFRESH = 5 * 3600e3;
+function rebuildMeta(cur) {
+  if (!metaBuilding) {
+    metaBuilding = buildSnapshot(cur)
+      .then(async snap => { await repo.putKV(META_KEY, snap); return snap; })
+      .catch(err => { console.error('meta:', err.message); if (cur) return { ...cur, stale: true }; throw err; })
+      .finally(() => { metaBuilding = null; });
+  }
+  return metaBuilding;
+}
+async function getMetaSnapshot() {
+  const cur = await repo.getKV(META_KEY).catch(() => null);
+  return cur || rebuildMeta(null);
+}
+
+// Metajuego de los torneos de esta página: decks registrados por los jugadores y sus resultados
+async function macaiMeta() {
+  const tournaments = (await repo.listTournaments()).filter(t => t.source !== 'tdf' && t.status !== 'registration');
+  const decks = new Map();
+  let total = 0;
+  const list = [];
+  for (const t of tournaments.slice(0, 40)) {
+    const [players, matches] = await Promise.all([repo.getTournamentPlayers(t.id), repo.getMatches(t.id)]);
+    const withDeck = players.filter(p => p.deck);
+    if (!withDeck.length) continue;
+    const table = standings(players, matches);
+    const byId = id => players.find(p => sameId(p.user_id, id));
+    list.push({ id: t.id, name: t.name, date: String(t.starts_at).slice(0, 10), players: players.length,
+      top: table.slice(0, 8).map(r => ({ placing: r.place, name: byId(r.user_id)?.display_name, deck: { name: byId(r.user_id)?.deck || '' } })) });
+    for (const p of withDeck) {
+      const key = p.deck.toLowerCase();
+      if (!decks.has(key)) decks.set(key, { key, name: p.deck, icons: [], players: 0, wins: 0, losses: 0, ties: 0, top8: 0, wins1st: 0 });
+      const d = decks.get(key);
+      const row = table.find(r => sameId(r.user_id, p.user_id));
+      d.players++; total++;
+      if (row) { d.wins += row.wins; d.losses += row.losses; d.ties += row.ties; if (row.place <= 8) d.top8++; if (row.place === 1) d.wins1st++; }
+    }
+  }
+  return {
+    total, events: list.length, list,
+    decks: [...decks.values()].map(d => {
+      const g = d.wins + d.losses + d.ties;
+      return { ...d, share: Math.round(d.players / (total || 1) * 1000) / 10, games: g,
+               winrate: g ? Math.round((d.wins + d.ties / 3) / g * 1000) / 10 : null, trend: null, weekly: [] };
+    }).sort((a, b) => b.players - a.players),
+  };
+}
+
+app.get('/api/meta', async (_req, res) => {
+  const [snap, macai] = await Promise.all([
+    getMetaSnapshot().catch(() => null), macaiMeta().catch(() => ({ decks: [], list: [], total: 0, events: 0 })),
+  ]);
+  if (!snap) throw new HttpError(502, 'No se pudieron obtener las estadísticas de Limitless ahora. Intenta en unos minutos.');
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json({ ...snap, macai });
+});
+
+// Rehace la foto si tiene más de 5 h (cualquiera puede llamarlo: como mucho provoca una actualización cada 5 h).
+// Un administrador puede forzarla con ?force=1.
+app.post('/api/meta/refresh', async (req, res) => {
+  const cur = await repo.getKV(META_KEY).catch(() => null);
+  const force = req.query.force === '1' && isAdmin(req.user);
+  if (cur && !force && Date.now() - Date.parse(cur.updated_at) < META_MIN_REFRESH)
+    return res.json({ ok: true, refreshed: false, updated_at: cur.updated_at });
+  const snap = await rebuildMeta(cur);
+  res.json({ ok: true, refreshed: !snap.stale, partial: !!snap.partial, updated_at: snap.updated_at });
+});
+
+// ---------- Competitivo: registro personal de partidas ----------
+
+const RESULTS = ['W', 'L', 'T'];
+function validateMatchLog(body) {
+  const source = body.source === 'online' ? 'online' : 'physical';
+  const date = str(body.played_at, 10);
+  const played_at = /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(date)) ? date : new Date().toISOString().slice(0, 10);
+  const prizes = v => (v !== null && v !== '' && Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 6 ? Number(v) : null);
+  const games = (Array.isArray(body.games) ? body.games : []).slice(0, 3)
+    .map(g => ({ result: RESULTS.includes(g?.result) ? g.result : null, first: g?.first === true ? true : g?.first === false ? false : null,
+                 prizes_me: prizes(g?.prizes_me), prizes_opp: prizes(g?.prizes_opp) }))
+    .filter(g => g.result);
+  const m = {
+    source, played_at, format: body.format === 'bo3' ? 'bo3' : 'bo1',
+    event: str(body.event, 80), my_deck: str(body.my_deck, 60), opp_deck: str(body.opp_deck, 60), opp_name: str(body.opp_name, 40),
+    notes: str(body.notes, 2000), games,
+  };
+  // Partida online: se lee el log en el servidor (perspectiva: el jugador elegido o el dueño de la mano inicial)
+  const log = typeof body.log === 'string' ? body.log.slice(0, 200000) : '';
+  if (source === 'online' && log) {
+    const st = parseLog(log);
+    if (st.players.length < 2 || !st.turns.length) throw new HttpError(400, 'No se reconoció el log. Cópialo completo desde Pokémon TCG Live (historial de la partida).');
+    const me = st.players.includes(body.me_name) ? body.me_name : st.me;
+    const opp = st.players.find(p => p !== me);
+    Object.assign(m, {
+      me_name: me, opp_name: m.opp_name || opp, turns: st.turns.length, reason: st.reason || '',
+      mulligans_me: st.mulligans[me] || 0, mulligans_opp: st.mulligans[opp] || 0,
+    });
+    if (!games.length) m.games = [{ result: st.winner ? (st.winner === me ? 'W' : 'L') : 'T', first: st.first ? st.first === me : null,
+                                     prizes_me: st.prizes[me] ?? null, prizes_opp: st.prizes[opp] ?? null }];
+    m.log = log;
+  }
+  if (!m.games.length) throw new HttpError(400, 'Indica el resultado de la partida.');
+  // Resultado del match: Bo1 = el juego; Bo3 = quien gane 2
+  const w = m.games.filter(g => g.result === 'W').length, l = m.games.filter(g => g.result === 'L').length;
+  m.result = m.format === 'bo1' ? m.games[0].result : w > l ? 'W' : l > w ? 'L' : 'T';
+  m.went_first = m.games[0].first;
+  return m;
+}
+
+async function ownMatchLog(req) {
+  const m = await repo.getMatchLog(str(req.params.id, 40));
+  if (!m || !sameId(m.user_id, req.user.id)) throw new HttpError(404, 'Partida no encontrada.');
+  return m;
+}
+
+app.get('/api/my-matches', requireAuth, async (req, res) => {
+  res.json({ matches: await repo.listMatchLogs(req.user.id) });
+});
+app.post('/api/my-matches', requireAuth, async (req, res) => {
+  const mine = await repo.listMatchLogs(req.user.id);
+  if (mine.length >= 1000) throw new HttpError(400, 'Llegaste al máximo de 1000 partidas guardadas.');
+  res.status(201).json({ match: await repo.createMatchLog(req.user.id, validateMatchLog(req.body)) });
+});
+app.get('/api/my-matches/:id', requireAuth, async (req, res) => {
+  res.json({ match: await ownMatchLog(req) });
+});
+app.put('/api/my-matches/:id', requireAuth, async (req, res) => {
+  const cur = await ownMatchLog(req);
+  const m = validateMatchLog({ ...cur, ...req.body, log: req.body.log ?? cur.log });
+  res.json({ match: await repo.updateMatchLog(cur.id, m) });
+});
+app.delete('/api/my-matches/:id', requireAuth, async (req, res) => {
+  const cur = await ownMatchLog(req);
+  await repo.deleteMatchLog(cur.id);
+  res.json({ ok: true });
+});
+
 // ---------- Perfiles públicos y estadísticas ----------
 
 app.get('/api/users/:username', async (req, res) => {
@@ -845,6 +1002,7 @@ app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
     await Promise.all((l.photos || []).map(p => deleteFile(photoKey(p.filename)).catch(() => {})));
   }
   for (const d of await repo.listDecks(user.id)) await repo.deleteDeck(d.id);
+  for (const m of await repo.listMatchLogs(user.id)) await repo.deleteMatchLog(m.id);
   await repo.deleteUser(user.id);
   res.json({ ok: true, deleted_listings: listings.length });
 });

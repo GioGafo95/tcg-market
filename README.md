@@ -52,6 +52,25 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
   la lista en texto (formato de Pokémon TCG Live: "4 Pikachu ex SVI 57"). Los decks son privados; si se marcan como
   públicos, cualquiera con el enlace los ve y aparecen en el perfil. Reglas en [public/deck-rules.js](public/deck-rules.js),
   compartidas por el navegador y el servidor.
+- **Competitivo** (`#/competitivo`), con submenú Metajuego · Oficiales · Online · Torneos locales · Mis partidas:
+  - **Metajuego de Pokémon TCG (Estándar)** con tres fuentes: torneos **oficiales** (Regionales, Internacionales y
+    Special Events; resultados públicos de [limitlesstcg.com](https://limitlesstcg.com)), torneos **online** (API pública de
+    [play.limitlesstcg.com](https://docs.limitlesstcg.com/developer/tournaments.html), sin clave) y los torneos de **Macai**
+    (deck que cada jugador registra al inscribirse). Muestra uso %, tendencia (últimas 2 semanas contra las 2 anteriores),
+    decks en ascenso y en caída, conversión a top cut, win rate, top 8, uso semanal en gráfica y una **predicción** para los
+    próximos torneos (uso ponderado por antigüedad, tendencia y fuerza de conversión). Lógica en [meta.js](meta.js).
+    La "foto" del metajuego se guarda en la base de datos y se rehace con `POST /api/meta/refresh` (solo si tiene más de
+    5 h); lo llama la tarea programada [meta-refresh.yml](.github/workflows/meta-refresh.yml) cada 6 h y el despliegue.
+    Las visitas nunca esperan a Limitless.
+  - **Mis partidas** (`#/partidas`): registro de partidas **físicas** (Bo1/Bo3, quién fue primero, premios, notas) y
+    **online**, pegando el log de Pokémon TCG Live. El log se lee en [public/ptcgl-log.js](public/ptcgl-log.js) (navegador y
+    servidor): jugadores, quién fue primero, mulligans, turno por turno (cartas, evoluciones, energía, ataques, KOs),
+    carrera de premios, el deck de cada uno (por los Pokémon jugados) y **puntos a revisar** (premios regalados por
+    efectos propios, Pokémon de banca jalados con Boss's Orders, energía perdida al retirar, turnos sin atacar o sin
+    Partidario, golpes grandes recibidos). Estadísticas: récord, win rate, yendo primero vs segundo, por mi deck, contra
+    cada deck rival, matriz de enfrentamientos y consejos según tus números.
+- **Fondo** con dorsos de cartas difuminados ([public/bg-cards.js](public/bg-cards.js)): diseños originales inspirados en
+  los colores de cada juego, no los dorsos oficiales.
 - **Administradores** (`#/admin`): pueden editar, marcar como vendida o borrar cualquier publicación (también desde
   el detalle de la carta), gestionar cualquier torneo, editar los datos de las cuentas, nombrar o quitar
   administradores, suspender cuentas (no pueden entrar y sus publicaciones dejan de verse) y borrar cuentas con sus
@@ -141,6 +160,11 @@ El dominio se toma de la variable del repo `QA_DOMAIN` (por defecto `tcg.macai.c
 | GET | /api/stats | Totales por juego |
 | GET/POST | /api/decks | Mis decks / crear deck |
 | GET/PUT/DELETE | /api/decks/:id | Ver (dueño, admin o público), editar y borrar un deck |
+| GET | /api/meta | Metajuego (oficiales, online, Macai, predicción) |
+| POST | /api/meta/refresh | Rehace la foto del metajuego si tiene más de 5 h |
+| GET/POST | /api/my-matches | Mis partidas / registrar (física o con log de TCG Live) |
+| GET/PUT/DELETE | /api/my-matches/:id | Ver (con log), editar y borrar una partida |
+| PUT | /api/tournaments/:id/deck | Mi deck en un torneo de la app |
 | GET | /api/admin/overview | (admin) Resumen, cuentas y todas las publicaciones |
 | PUT/DELETE | /api/admin/users/:id | (admin) Editar perfil, rol `is_admin`, suspensión `blocked` / borrar cuenta |
 | GET | /healthz | Salud del servicio |

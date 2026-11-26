@@ -1,0 +1,20 @@
+name: Actualizar metajuego (QA)
+
+# Rehace la foto del metajuego (torneos oficiales y online de Limitless) cada 6 horas,
+# para que las visitas nunca esperen a Limitless. El endpoint solo actualiza si la foto tiene más de 5 h.
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Pedir actualización
+        run: |
+          curl -sS --fail-with-body --max-time 60 -X POST "${{ vars.QA_URL }}/api/meta/refresh"

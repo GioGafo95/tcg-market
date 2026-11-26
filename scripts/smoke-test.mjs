@@ -37,6 +37,7 @@ const run = async () => {
     await call('/api/listings/mine', { expect: 401 }); ok('rutas privadas protegidas');
     await call('/api/admin/overview', { expect: 401 }); ok('administración protegida');
     await call('/api/decks', { expect: 401 }); ok('decks protegidos');
+    await call('/api/my-matches', { expect: 401 }); ok('registro de partidas protegido');
     const tl = await call('/api/tournaments', { expect: 200 }); ok(`torneos: ${tl.data.tournaments.length}`);
     await call('/api/tournaments/me', { expect: 401 }); ok('panel de torneos protegido');
     console.log('\nTodo OK (solo lectura).');
@@ -241,6 +242,26 @@ const run = async () => {
   cookie = saveCookie;
   await call(`/api/decks/${deck.id}`, { method: 'DELETE', expect: 200 });
   ok('deck creado (60 cartas, avisa 5 copias), privado → público, y borrado');
+
+  // Mis partidas: importar un log de Pokémon TCG Live (de ejemplo) y registrar una partida física
+  const LOG = [
+    'Setup', 'Ash won the coin toss.', 'Ash decided to go first.', 'Ash drew 7 cards for the opening hand.', '- 7 drawn cards.',
+    '   • Pikachu, Pikachu, Basic Lightning Energy, Nest Ball, Iono, Switch, Ultra Ball', 'Gary drew 7 cards for the opening hand.',
+    '- 7 drawn cards.', 'Ash played Pikachu to the Active Spot.', 'Gary played Eevee to the Active Spot.', '',
+    "Ash's Turn", 'Ash drew a card.', 'Ash attached Basic Lightning Energy to Pikachu in the Active Spot.', 'Ash ended their turn.', '',
+    "Gary's Turn", 'Gary drew a card.', "Gary's Eevee used Tackle on Ash’s Pikachu for 60 damage.", "Ash's Pikachu was Knocked Out!",
+    'Gary took a Prize card.', 'Opponent took all of their Prize cards. Gary wins.',
+  ].join('\n');
+  const mOn = (await call('/api/my-matches', { method: 'POST', expect: 201, body: { source: 'online', log: LOG, my_deck: 'Pikachu', played_at: '2026-11-20' } })).data.match;
+  if (mOn.result !== 'L' || mOn.went_first !== true || mOn.opp_name !== 'Gary' || mOn.turns !== 2) throw new Error(`log mal leído: ${JSON.stringify(mOn)}`);
+  const mPh = (await call('/api/my-matches', { method: 'POST', expect: 201, body: { source: 'physical', format: 'bo3', my_deck: 'Pikachu', opp_deck: 'Eevee',
+    games: [{ result: 'W', first: true }, { result: 'W', first: false }] } })).data.match;
+  if (mPh.result !== 'W') throw new Error('Bo3 mal calculado');
+  const myM = (await call('/api/my-matches', { expect: 200 })).data.matches;
+  if (myM.length !== 2 || myM.some(x => x.log)) throw new Error('lista de partidas incorrecta');
+  await call(`/api/my-matches/${mOn.id}`, { method: 'DELETE', expect: 200 });
+  await call(`/api/my-matches/${mPh.id}`, { method: 'DELETE', expect: 200 });
+  ok('partida online desde log (derrota, fue 1.º, 2 turnos) y física Bo3 2-0 registradas y borradas');
   await call('/api/auth/logout', { method: 'POST', expect: 200 });
   const me = await call('/api/auth/me', { expect: 200 });
   if (me.data.user) throw new Error('la sesión sigue activa tras cerrar sesión');

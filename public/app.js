@@ -1,6 +1,10 @@
 // Macai TCG — SPA en JavaScript puro con rutas por hash (#/...)
 import { sceneSVG, emblemSVG } from './scene.js';
 import { SECTIONS, SECTION_LABEL, CATEGORY_LABEL, MAX_QTY, deckSummary, deckToText, parseDeckText, mergeCards } from './deck-rules.js';
+import { parseLog, analyze, guessDeck, turnSummary } from './ptcgl-log.js';
+import { mountCardBackground } from './bg-cards.js';
+
+mountCardBackground();
 
 // Efecto holográfico: la carta se inclina en 3D y el brillo sigue al ratón
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -155,7 +159,7 @@ const SECTIONS_NAV = [
   { key: '', href: '#/', icon: '🃏', label: 'Cartas' },
   { key: 'accesorios', href: '#/accesorios', icon: '🎒', label: 'Accesorios' },
   { key: 'decks', href: '#/decks', icon: '📚', label: 'Decks' },
-  { key: 'torneos', href: '#/torneos', icon: '⚔️', label: 'Torneos' },
+  { key: 'competitivo', href: '#/competitivo', icon: '🏆', label: 'Competitivo' },
 ];
 const initials = (u) => {
   const [a = '', b = ''] = (u.first_name ? [u.first_name, u.last_name || ''] : String(u.display_name || u.username || '?').split(' '));
@@ -185,7 +189,8 @@ function renderNav() {
             <div class="menu-head"><b>${esc(u.display_name)}</b><small>@${esc(u.username)}</small></div>
             <a role="menuitem" href="#/mis-cartas"><span>🏷️</span><div><b>Mis publicaciones</b></div></a>
             <a role="menuitem" href="#/decks"><span>📚</span><div><b>Mis decks</b></div></a>
-            <a role="menuitem" href="#/torneos"><span>⚔️</span><div><b>Mis torneos</b></div></a>
+            <a role="menuitem" href="#/partidas"><span>📝</span><div><b>Mis partidas</b></div></a>
+            <a role="menuitem" href="#/torneos"><span>⚔️</span><div><b>Torneos locales</b></div></a>
             <a role="menuitem" href="#/perfil"><span>👤</span><div><b>Mi perfil</b></div></a>
             ${u.is_admin ? '<a role="menuitem" href="#/admin"><span>🛡️</span><div><b>Administración</b></div></a>' : ''}
             <button type="button" role="menuitem" id="logout"><span>🚪</span><div><b>Cerrar sesión</b></div></button>
@@ -217,7 +222,7 @@ function renderNav() {
 // Resalta la sección actual en las dos barras
 function markActiveNav() {
   const first = location.hash.slice(2).split(/[/?]/)[0];
-  const sec = ['carta', 'vendedor'].includes(first) ? '' : ['torneo'].includes(first) ? 'torneos' : first;
+  const sec = ['carta', 'vendedor'].includes(first) ? '' : ['torneo', 'torneos', 'partidas'].includes(first) ? 'competitivo' : first;
   document.querySelectorAll('[data-sec]').forEach(a => a.classList.toggle('active', a.dataset.sec === sec));
 }
 
@@ -1312,6 +1317,7 @@ async function viewTournaments() {
   const o = me?.overall;
 
   $app.innerHTML = `
+    ${compNav('torneos')}
     <div class="t-hero">
       ${emblemSVG()}
       <div>
@@ -1415,6 +1421,7 @@ async function viewTournament(id) {
   };
 
   $app.innerHTML = `
+    ${compNav('torneos')}
     <p><a href="#/torneos">← Torneos</a></p>
     <div class="t-hero">
       ${emblemSVG()}
@@ -1448,6 +1455,12 @@ async function viewTournament(id) {
             <div class="tstat"><b>${me.ties}</b><span>Empates</span></div>
           </div>
         </div>
+        ${!isTdf ? `<form class="my-deck-form" id="myDeckForm">
+          <label>🃏 Mi deck en este torneo <span class="card-meta">(alimenta el metajuego de la página)</span></label>
+          <div class="search-row"><input name="deck" list="tDeckNames" maxlength="60" value="${esc(me.deck || '')}" placeholder="ej. Dragapult Dusknoir">
+            <button class="btn small" type="submit">Guardar</button></div>
+          <datalist id="tDeckNames"></datalist>
+        </form>` : ''}
       </div>` : ''}
 
     ${d.can_manage && isTdf ? `
@@ -1499,8 +1512,8 @@ async function viewTournament(id) {
     <h2>${isTdf ? 'Jugadores' : 'Jugadores inscritos'} (${d.players.length})</h2>
     ${isTdf ? '<p class="muted">Los jugadores con cuenta en la app aparecen con su usuario; los demás, con nombre e inicial del apellido.</p>' : ''}
     ${d.players.length ? `<div class="panel" style="overflow-x:auto">
-      <table class="mine"><thead><tr><th>Jugador</th>${isTdf ? '<th>Categoría</th>' : '<th>Zona</th>'}${d.can_manage ? '<th>ID Pokémon</th>' : ''}</tr></thead>
-      <tbody>${d.players.map(p => `<tr class="${isMe(p) ? 'mine-row' : ''}"><td>${nameOf(p)}</td><td>${esc((isTdf ? p.category : p.location) || '—')}</td>${d.can_manage ? `<td>${esc(p.pokemon_id || '—')}</td>` : ''}</tr>`).join('')}</tbody></table>
+      <table class="mine"><thead><tr><th>Jugador</th>${isTdf ? '<th>Categoría</th>' : '<th>Zona</th><th>Deck</th>'}${d.can_manage ? '<th>ID Pokémon</th>' : ''}</tr></thead>
+      <tbody>${d.players.map(p => `<tr class="${isMe(p) ? 'mine-row' : ''}"><td>${nameOf(p)}</td><td>${esc((isTdf ? p.category : p.location) || '—')}</td>${isTdf ? '' : `<td>${esc(p.deck || '—')}</td>`}${d.can_manage ? `<td>${esc(p.pokemon_id || '—')}</td>` : ''}</tr>`).join('')}</tbody></table>
     </div>` : '<p class="muted">Todavía no hay jugadores inscritos.</p>'}`;
 
   const reload = () => viewTournament(id);
@@ -1508,6 +1521,16 @@ async function viewTournament(id) {
     e.currentTarget.disabled = true;
     try { await fn(); } catch (err) { document.getElementById('err').textContent = err.message; e.currentTarget.disabled = false; }
   });
+  // Mi deck en este torneo (sugerencias: metajuego y mis decks guardados)
+  const deckForm = document.getElementById('myDeckForm');
+  if (deckForm) {
+    deckSuggestions().then(names => { document.getElementById('tDeckNames').innerHTML = names.map(n => `<option value="${esc(n)}">`).join(''); });
+    deckForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try { await api(`/api/tournaments/${id}/deck`, { method: 'PUT', body: { deck: deckForm.deck.value } }); toast('Deck guardado'); reload(); }
+      catch (err) { document.getElementById('err').textContent = err.message; }
+    });
+  }
   act('join', async () => { await api(`/api/tournaments/${id}/join`, { method: 'POST' }); toast('¡Inscrito! Suerte en la arena'); reload(); });
   act('leave', async () => { await api(`/api/tournaments/${id}/leave`, { method: 'POST' }); toast('Saliste del torneo'); reload(); });
   act('nextRound', async () => { const { round } = await api(`/api/tournaments/${id}/rounds`, { method: 'POST' }); toast(`Ronda ${round} emparejada`); reload(); });
@@ -1957,6 +1980,564 @@ async function viewDeckEditor(id) {
   paint();
 }
 
+// ---------- Competitivo: metajuego, torneos y registro de partidas ----------
+
+// Paleta categórica validada (orden fijo; ver guía de gráficas) para series sobre fondo claro
+const SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300'];
+let metaCache = null, metaCacheAt = 0;
+async function loadMeta() {
+  if (metaCache && Date.now() - metaCacheAt < 5 * 60e3) return metaCache;
+  metaCache = await api('/api/meta'); metaCacheAt = Date.now();
+  return metaCache;
+}
+
+function compNav(active) {
+  const tabs = [
+    ['meta', '#/competitivo', '📊 Metajuego'], ['oficiales', '#/competitivo/oficiales', '🏟️ Oficiales'],
+    ['online', '#/competitivo/online', '🌐 Online'], ['torneos', '#/torneos', '⚔️ Torneos locales'], ['partidas', '#/partidas', '📝 Mis partidas'],
+  ];
+  return `<nav class="comp-nav" aria-label="Competitivo">${tabs.map(([k, h, t]) => `<a class="${active === k ? 'active' : ''}" href="${h}">${t}</a>`).join('')}</nav>`;
+}
+
+// Íconos de Pokémon de un deck (sprites de PokeAPI resueltos en el servidor)
+function deckIcons(deck, sprites = {}) {
+  const icons = (deck.icons || []).slice(0, 2);
+  if (!icons.length) return `<span class="deck-ico fallback">${esc((deck.name || '?')[0])}</span>`;
+  return `<span class="deck-icons">${icons.map(i => sprites[i] ? `<img src="${esc(sprites[i])}" alt="${esc(i)}" loading="lazy">`
+    : `<span class="deck-ico fallback" title="${esc(i)}">${esc(i[0].toUpperCase())}</span>`).join('')}</span>`;
+}
+const pct = (n, d = 1) => (n == null ? '—' : `${Number(n).toFixed(d)}%`);
+function trendBadge(t) {
+  if (t == null) return '<span class="trend flat">—</span>';
+  if (Math.abs(t) < 0.5) return `<span class="trend flat" title="Sin cambio relevante">→ ${t > 0 ? '+' : ''}${t.toFixed(1)}</span>`;
+  return t > 0 ? `<span class="trend up" title="Sube en las últimas 2 semanas">▲ +${t.toFixed(1)}</span>`
+               : `<span class="trend down" title="Baja en las últimas 2 semanas">▼ ${t.toFixed(1)}</span>`;
+}
+const fmtShort = (d) => new Date(d + (d.length === 10 ? 'T12:00:00' : '')).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
+
+// Gráfica de líneas en SVG con leyenda, etiquetas al final de cada línea y tooltip con cruz al pasar el cursor
+function lineChart(id, { labels, series, yFmt = v => `${v}%`, height = 260, yMax = null }) {
+  const W = 760, H = height, L = 40, R = 150, T = 14, B = 30;
+  const max = Math.max(5, ...series.flatMap(s => s.values.filter(v => v != null)));
+  const top = yMax || Math.ceil(max / 5) * 5;
+  const x = i => L + (labels.length < 2 ? 0 : i * (W - L - R) / (labels.length - 1));
+  const y = v => T + (H - T - B) * (1 - v / top);
+  const ticks = [0, top / 2, top];
+  const path = vals => vals.map((v, i) => v == null ? '' : `${i && vals[i - 1] != null ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  // Etiquetas finales sin encimarse (separación mínima 13 px)
+  const ends = series.map((s, k) => ({ k, v: s.values[s.values.length - 1] ?? 0 })).sort((a, b) => y(a.v) - y(b.v));
+  let lastY = -99; ends.forEach(e => { e.y = Math.max(y(e.v), lastY + 13); lastY = e.y; });
+  const svg = `
+    <svg viewBox="0 0 ${W} ${H}" class="chart-svg" role="img" aria-label="Uso semanal de los decks principales">
+      ${ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" class="grid"/><text x="${L - 6}" y="${y(t) + 4}" class="tick" text-anchor="end">${yFmt(t)}</text>`).join('')}
+      ${labels.map((lb, i) => (i % Math.ceil(labels.length / 7) === 0 || i === labels.length - 1)
+        ? `<text x="${x(i)}" y="${H - 8}" class="tick" text-anchor="middle">${esc(lb)}</text>` : '').join('')}
+      ${series.map((s, k) => `<path d="${path(s.values)}" fill="none" stroke="${SERIES[k]}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`).join('')}
+      ${ends.map(e => `<text x="${W - R + 8}" y="${e.y + 4}" class="end-label"><tspan fill="${SERIES[e.k]}">●</tspan> ${esc(series[e.k].name.length > 19 ? series[e.k].name.slice(0, 18) + '…' : series[e.k].name)}</text>`).join('')}
+      <line class="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" visibility="hidden"/>
+      ${series.map((s, k) => `<circle class="dot" data-k="${k}" r="4.5" fill="${SERIES[k]}" stroke="#fffaf2" stroke-width="2" visibility="hidden"/>`).join('')}
+      <rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>
+    </svg>
+    <div class="chart-tip" hidden></div>`;
+  requestAnimationFrame(() => {
+    const host = document.getElementById(id); if (!host) return;
+    const el = host.querySelector('svg'), tip = host.querySelector('.chart-tip');
+    const move = (ev) => {
+      const r = el.getBoundingClientRect();
+      const px = (ev.clientX - r.left) * W / r.width;
+      const i = Math.max(0, Math.min(labels.length - 1, Math.round((px - L) / ((W - L - R) / Math.max(1, labels.length - 1)))));
+      el.querySelector('.cross').setAttribute('x1', x(i)); el.querySelector('.cross').setAttribute('x2', x(i));
+      el.querySelector('.cross').setAttribute('visibility', 'visible');
+      el.querySelectorAll('.dot').forEach(d => {
+        const v = series[d.dataset.k].values[i];
+        d.setAttribute('visibility', v == null ? 'hidden' : 'visible');
+        if (v != null) { d.setAttribute('cx', x(i)); d.setAttribute('cy', y(v)); }
+      });
+      const rows = series.map((s, k) => [s.name, s.values[i], k]).filter(r => r[1] != null).sort((a, b) => b[1] - a[1]);
+      tip.innerHTML = `<b>${esc(labels[i])}</b>${rows.map(([n, v, k]) => `<div><span style="color:${SERIES[k]}">●</span> ${esc(n)} <b>${yFmt(v)}</b></div>`).join('')}`;
+      tip.hidden = false;
+      const left = (x(i) / W) * r.width;
+      tip.style.left = `${Math.min(r.width - 190, Math.max(0, left + 12))}px`;
+    };
+    el.querySelector('.hit').addEventListener('pointermove', move);
+    el.querySelector('.hit').addEventListener('pointerleave', () => {
+      tip.hidden = true; el.querySelector('.cross').setAttribute('visibility', 'hidden');
+      el.querySelectorAll('.dot').forEach(d => d.setAttribute('visibility', 'hidden'));
+    });
+  });
+  return `<div class="chart" id="${id}">${svg}</div>
+    <div class="chart-legend">${series.map((s, k) => `<span><i style="background:${SERIES[k]}"></i>${esc(s.name)}</span>`).join('')}</div>`;
+}
+
+async function viewMeta(params) {
+  const src = ['oficial', 'online', 'macai'].includes(params.get('fuente')) ? params.get('fuente') : 'oficial';
+  const m = await loadMeta();
+  const data = src === 'oficial' ? m.official : src === 'online' ? m.online : m.macai;
+  const sprites = m.sprites || {};
+  const decks = data.decks || [];
+  const risers = decks.filter(d => d.trend != null && d.players >= 10).sort((a, b) => b.trend - a.trend).slice(0, 4);
+  const fallers = decks.filter(d => d.trend != null && d.players >= 10).sort((a, b) => a.trend - b.trend).slice(0, 4);
+  const top6 = decks.slice(0, 6);
+  const weeks = (data.weeks || []).slice(-10);
+  const srcLabel = { oficial: 'Torneos oficiales', online: 'Torneos online (Limitless)', macai: 'Torneos de Macai TCG' }[src];
+
+  $app.innerHTML = `
+    ${compNav('meta')}
+    <div class="page-head">
+      <div><h1>📊 Metajuego de Pokémon TCG</h1>
+        <p class="muted">Formato Estándar · actualizado ${new Date(m.updated_at).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}
+          ${m.partial || m.stale ? ' · <span class="warn-text">algunos datos no se pudieron actualizar</span>' : ''}</p></div>
+      <div class="segmented dark" id="srcSel">
+        ${[['oficial', 'Oficiales'], ['online', 'Online'], ['macai', 'Macai']].map(([k, t]) => `<button type="button" class="${src === k ? 'active' : ''}" data-src="${k}">${t}</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="stat-tiles">
+      <div class="stat-tile"><span>Torneos analizados</span><b>${data.events || 0}</b><small>${esc(srcLabel)}</small></div>
+      <div class="stat-tile"><span>Jugadores con deck conocido</span><b>${(data.total || 0).toLocaleString('es-MX')}</b><small>${src === 'oficial' ? 'Regionales, Internacionales y Special Events' : src === 'online' ? `últimas 4 semanas, torneos de ${24}+ jugadores` : 'decks registrados al inscribirse'}</small></div>
+      <div class="stat-tile"><span>Deck más jugado</span><b class="tile-deck">${decks[0] ? `${deckIcons(decks[0], sprites)} ${esc(decks[0].name)}` : '—'}</b><small>${decks[0] ? `${pct(decks[0].share)} de los jugadores` : ''}</small></div>
+      <div class="stat-tile"><span>El que más sube</span><b class="tile-deck">${risers[0] && risers[0].trend > 0 ? `${deckIcons(risers[0], sprites)} ${esc(risers[0].name)}` : '—'}</b><small>${risers[0] && risers[0].trend > 0 ? `+${risers[0].trend.toFixed(1)} puntos en 2 semanas` : 'sin datos suficientes'}</small></div>
+    </div>
+
+    ${src !== 'macai' ? `
+    <section class="panel">
+      <div class="panel-title"><h2>🔮 Predicción para los próximos torneos</h2>
+        <span class="card-meta">Combina oficiales (peso doble) y online, con más peso a lo reciente</span></div>
+      <div class="pred-grid">${(m.predictions || []).slice(0, 8).map((p, i) => `
+        <div class="pred-card ${p.outlook}">
+          <span class="pred-rank">${i + 1}</span>
+          ${deckIcons(p, sprites)}
+          <div class="pred-info"><b class="one-line">${esc(p.name)}</b>
+            <span class="card-meta">Uso esperado <b>${pct(p.predicted)}</b> · ahora ${pct(p.share)}</span>
+            <span class="pred-tags">
+              ${p.outlook === 'up' ? '<span class="trend up">▲ Al alza</span>' : p.outlook === 'down' ? '<span class="trend down">▼ A la baja</span>' : '<span class="trend flat">→ Estable</span>'}
+              ${p.strength >= 1.15 ? '<span class="tag-strong" title="Llega al top cut más de lo que su uso haría esperar">💪 Convierte bien</span>' : p.strength <= 0.85 ? '<span class="tag-weak" title="Llega al top cut menos de lo esperado">Convierte poco</span>' : ''}
+            </span></div>
+        </div>`).join('')}</div>
+      <details class="manual method"><summary>¿Cómo se calcula?</summary>
+        <p class="card-meta">Para cada familia de deck: <b>1)</b> su uso en los torneos recientes, donde cada torneo pesa menos mientras más viejo es (la mitad cada 10 días) y los oficiales cuentan el doble;
+        <b>2)</b> la tendencia de las últimas semanas (si sube o baja de forma constante); <b>3)</b> su fuerza: qué tanto llega al top cut (12.5 % mejor) comparado con lo que su uso haría esperar.
+        Es una estimación estadística para prepararte, no una certeza: un deck nuevo o un cambio de cartas puede moverlo todo.</p></details>
+    </section>` : ''}
+
+    ${src !== 'macai' && risers.length ? `
+    <div class="two-cols">
+      <section class="panel"><h2 class="panel-h">▲ En ascenso</h2>${moverList(risers, sprites)}</section>
+      <section class="panel"><h2 class="panel-h">▼ En caída</h2>${moverList(fallers, sprites)}</section>
+    </div>` : ''}
+
+    ${weeks.length >= 2 && top6.length ? `
+    <section class="panel">
+      <div class="panel-title"><h2>Uso semanal de los 6 decks principales</h2><span class="card-meta">% de jugadores por semana · ${esc(srcLabel)}</span></div>
+      ${lineChart('metaChart', { labels: weeks.map(fmtShort), series: top6.map(d => ({ name: d.name, values: weeks.map(w => d.weekly.find(p => p.week === w)?.share ?? null) })) })}
+    </section>` : ''}
+
+    <section class="panel">
+      <div class="panel-title"><h2>Ranking de decks</h2>
+        <input type="search" id="deckFilter" class="mini-search" placeholder="Filtrar deck…" aria-label="Filtrar deck"></div>
+      ${decks.length ? `<div class="table-wrap"><table class="meta-table">
+        <thead><tr><th>#</th><th>Deck</th><th>Uso</th><th title="Cambio de uso: últimas 2 semanas contra las 2 anteriores">Tendencia</th>
+          ${src === 'oficial' ? '<th title="% de sus jugadores que llegaron al top cut (12.5 % mejor)">Conversión</th><th>Top 8</th><th>🏆</th>'
+            : '<th title="Victorias ÷ partidas (empate = 1/3)">Win rate</th><th>Top 8</th><th>🏆</th>'}</tr></thead>
+        <tbody>${decks.slice(0, 40).map((d, i) => `
+          <tr data-name="${esc(d.name.toLowerCase())}">
+            <td class="rank">${i + 1}</td>
+            <td><div class="deck-cell">${deckIcons(d, sprites)}<b>${esc(d.name)}</b></div></td>
+            <td class="share-cell"><span class="share-bar"><i style="width:${Math.min(100, d.share * (100 / Math.max(1, decks[0].share)))}%"></i></span>${pct(d.share)}<small> · ${d.players}</small></td>
+            <td>${trendBadge(d.trend)}</td>
+            <td>${src === 'oficial' ? pct(d.conversion) : d.winrate != null ? pct(d.winrate) : '—'}</td>
+            <td>${d.top8 || 0}</td><td>${d.wins1st || 0}</td>
+          </tr>`).join('')}</tbody></table></div>`
+        : `<div class="empty small">${src === 'macai' ? 'Aún no hay torneos de la página con decks registrados. Cuando te inscribas a un torneo, registra con qué deck juegas.' : 'Sin datos por ahora.'}</div>`}
+      <p class="card-meta source-note">Fuente: ${src === 'macai' ? 'torneos organizados en Macai TCG.' : `<a href="https://limitlesstcg.com" target="_blank" rel="noopener">Limitless TCG</a> (${src === 'oficial' ? 'resultados de eventos oficiales Play! Pokémon' : 'torneos online en play.limitlesstcg.com'}).`}</p>
+    </section>`;
+
+  document.getElementById('srcSel').addEventListener('click', e => {
+    const b = e.target.closest('[data-src]'); if (b) go(`#/competitivo?fuente=${b.dataset.src}`);
+  });
+  document.getElementById('deckFilter')?.addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    $app.querySelectorAll('.meta-table tbody tr').forEach(tr => { tr.hidden = q && !tr.dataset.name.includes(q); });
+  });
+}
+
+const moverList = (list, sprites) => `<ul class="movers">${list.map(d => `
+  <li>${deckIcons(d, sprites)}<span class="one-line">${esc(d.name)}</span>${trendBadge(d.trend)}<small>${pct(d.recent_share ?? d.share)}</small></li>`).join('')}</ul>`;
+
+async function viewCompEvents(kind) {
+  const m = await loadMeta();
+  const data = kind === 'oficiales' ? m.official : m.online;
+  const sprites = m.sprites || {};
+  $app.innerHTML = `
+    ${compNav(kind)}
+    <div class="page-head"><div>
+      <h1>${kind === 'oficiales' ? '🏟️ Torneos oficiales recientes' : '🌐 Torneos online recientes'}</h1>
+      <p class="muted">${kind === 'oficiales' ? 'Regionales, Internacionales y Special Events de Play! Pokémon (formato Estándar).' : 'Torneos de 24 jugadores o más en Limitless (últimas 4 semanas).'}</p></div></div>
+    <div class="event-list">${(data.list || []).map(ev => `
+      <article class="panel event-card">
+        <div class="event-head">
+          <div><h2>${ev.country ? `<span class="flag-chip">${esc(ev.country)}</span> ` : ''}${esc(ev.name)}</h2>
+            <span class="card-meta">${fmtShort(ev.date)} · ${Number(ev.players).toLocaleString('es-MX')} jugadores</span></div>
+          ${ev.url ? `<a class="btn small" href="${esc(ev.url)}" target="_blank" rel="noopener">Ver en Limitless ↗</a>` : ''}
+        </div>
+        <ol class="top8">${ev.top.map(s => `
+          <li class="${s.placing === 1 ? 'champ' : ''}"><span class="place">${s.placing === 1 ? '🏆' : s.placing}</span>${deckIcons(s.deck, sprites)}
+            <span class="one-line"><b>${esc(s.deck.name)}</b><small>${esc(s.name)}${s.record ? ` · ${s.record.wins}-${s.record.losses}-${s.record.ties}` : ''}</small></span></li>`).join('')}</ol>
+      </article>`).join('') || '<div class="empty">Sin torneos por ahora.</div>'}</div>
+    <p class="card-meta source-note">Fuente: <a href="https://limitlesstcg.com" target="_blank" rel="noopener">Limitless TCG</a>.</p>`;
+}
+
+// ---------- Mis partidas ----------
+
+const RES_TXT = { W: 'Victoria', L: 'Derrota', T: 'Empate' };
+const winPct = (w, n) => (n ? Math.round(w / n * 100) : null);
+
+function matchStats(list) {
+  const n = list.length, w = list.filter(m => m.result === 'W').length, l = list.filter(m => m.result === 'L').length;
+  const t = n - w - l;
+  const first = list.filter(m => m.went_first === true), second = list.filter(m => m.went_first === false);
+  const by = (key) => {
+    const map = new Map();
+    for (const m of list) { const k = m[key] || 'Sin registrar'; if (!map.has(k)) map.set(k, { k, n: 0, w: 0, l: 0, t: 0 }); const r = map.get(k); r.n++; r[m.result === 'W' ? 'w' : m.result === 'L' ? 'l' : 't']++; }
+    return [...map.values()].sort((a, b) => b.n - a.n);
+  };
+  return {
+    n, w, l, t, pct: winPct(w, n),
+    first: { n: first.length, pct: winPct(first.filter(m => m.result === 'W').length, first.length) },
+    second: { n: second.length, pct: winPct(second.filter(m => m.result === 'W').length, second.length) },
+    byMine: by('my_deck'), byOpp: by('opp_deck'),
+    mull: list.filter(m => m.source === 'online').reduce((a, m) => a + (m.mulligans_me || 0), 0),
+    online: list.filter(m => m.source === 'online').length,
+    avgTurns: (() => { const o = list.filter(m => m.turns); return o.length ? Math.round(o.reduce((a, m) => a + m.turns, 0) / o.length) : null; })(),
+  };
+}
+const wlt = r => `${r.w}-${r.l}${r.t ? '-' + r.t : ''}`;
+const pctCell = (p, n) => (p == null ? '—' : `<span class="wr ${p >= 55 ? 'good' : p <= 45 ? 'bad' : ''}">${p}%</span>${n != null ? `<small> (${n})</small>` : ''}`);
+
+async function viewMatches(params) {
+  if (!requireLogin()) return;
+  const { matches: all } = await api('/api/my-matches');
+  const src = ['online', 'physical'].includes(params.get('tipo')) ? params.get('tipo') : '';
+  const myDeck = params.get('deck') || '';
+  const list = all.filter(m => (!src || m.source === src) && (!myDeck || m.my_deck === myDeck));
+  const s = matchStats(list);
+  const myDecks = [...new Set(all.map(m => m.my_deck).filter(Boolean))];
+  // Matriz de enfrentamientos: mis decks × decks rivales (los 6 rivales más frecuentes)
+  const opps = s.byOpp.slice(0, 6).map(r => r.k);
+  const mine = s.byMine.slice(0, 5).map(r => r.k);
+  const cell = (a, b) => { const g = list.filter(m => (m.my_deck || 'Sin registrar') === a && (m.opp_deck || 'Sin registrar') === b);
+    const w = g.filter(m => m.result === 'W').length; return g.length ? pctCell(winPct(w, g.length), g.length) : '<span class="muted">·</span>'; };
+
+  $app.innerHTML = `
+    ${compNav('partidas')}
+    <div class="page-head">
+      <div><h1>📝 Mis partidas</h1><p class="muted">Registra tus partidas físicas y las de Pokémon TCG Live para ver tus estadísticas y mejorar.</p></div>
+      <div class="t-actions"><a class="btn" href="#/partidas/nueva?tipo=fisica">＋ Partida física</a><a class="btn primary" href="#/partidas/nueva?tipo=online">📋 Importar log online</a></div>
+    </div>
+    ${all.length ? `
+    <form class="filters mini" id="mFilters">
+      <select name="tipo"><option value="">Todas las partidas</option><option value="online" ${src === 'online' ? 'selected' : ''}>Online (TCG Live)</option><option value="physical" ${src === 'physical' ? 'selected' : ''}>Físicas</option></select>
+      <select name="deck"><option value="">Todos mis decks</option>${myDecks.map(d => `<option ${d === myDeck ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>
+    </form>
+    <div class="stat-tiles">
+      <div class="stat-tile"><span>Récord</span><b>${s.w}-${s.l}-${s.t}</b><small>${s.n} partida(s)</small></div>
+      <div class="stat-tile"><span>Win rate</span><b>${s.pct ?? '—'}${s.pct != null ? '%' : ''}</b><small>${recentForm(list)}</small></div>
+      <div class="stat-tile"><span>Yendo primero</span><b>${s.first.pct ?? '—'}${s.first.pct != null ? '%' : ''}</b><small>${s.first.n} partida(s)</small></div>
+      <div class="stat-tile"><span>Yendo segundo</span><b>${s.second.pct ?? '—'}${s.second.pct != null ? '%' : ''}</b><small>${s.second.n} partida(s)</small></div>
+    </div>
+    ${coachTips(s)}
+    <div class="two-cols">
+      <section class="panel"><h2 class="panel-h">Por mi deck</h2>
+        <table class="mini-table"><thead><tr><th>Deck</th><th>Récord</th><th>Win rate</th></tr></thead>
+        <tbody>${s.byMine.map(r => `<tr><td>${esc(r.k)}</td><td>${wlt(r)}</td><td>${pctCell(winPct(r.w, r.n))}</td></tr>`).join('')}</tbody></table></section>
+      <section class="panel"><h2 class="panel-h">Contra cada deck rival</h2>
+        <table class="mini-table"><thead><tr><th>Rival</th><th>Récord</th><th>Win rate</th></tr></thead>
+        <tbody>${s.byOpp.slice(0, 10).map(r => `<tr><td>${esc(r.k)}</td><td>${wlt(r)}</td><td>${pctCell(winPct(r.w, r.n))}</td></tr>`).join('')}</tbody></table></section>
+    </div>
+    ${mine.length && opps.length > 1 ? `
+    <section class="panel"><div class="panel-title"><h2>Matriz de enfrentamientos</h2><span class="card-meta">Tu win rate (partidas) · verde ≥ 55 %, rojo ≤ 45 %</span></div>
+      <div class="table-wrap"><table class="matrix"><thead><tr><th>Mi deck ＼ Rival</th>${opps.map(o => `<th>${esc(o)}</th>`).join('')}</tr></thead>
+      <tbody>${mine.map(a => `<tr><th>${esc(a)}</th>${opps.map(b => `<td>${cell(a, b)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>` : ''}
+    <section class="panel">
+      <h2 class="panel-h">Historial</h2>
+      <div class="match-list">${list.map(m => `
+        <a class="match-row" href="#/partidas/${m.id}">
+          <span class="res ${m.result}">${m.result === 'W' ? 'V' : m.result === 'L' ? 'D' : 'E'}</span>
+          <span class="mr-main"><b>${esc(m.my_deck || 'Mi deck')}</b> <span class="muted">vs</span> <b>${esc(m.opp_deck || 'Deck rival')}</b>
+            <small>${m.opp_name ? esc(m.opp_name) + ' · ' : ''}${m.event ? esc(m.event) + ' · ' : ''}${fmtShort(m.played_at)}</small></span>
+          <span class="mr-tags">${m.source === 'online' ? '<span class="badge cond">🌐 Online</span>' : '<span class="badge cond">🃏 Física</span>'}
+            ${m.went_first === true ? '<span class="badge cond">1.º</span>' : m.went_first === false ? '<span class="badge cond">2.º</span>' : ''}
+            ${m.format === 'bo3' ? `<span class="badge cond">Bo3 ${m.games.filter(g => g.result === 'W').length}-${m.games.filter(g => g.result === 'L').length}</span>` : ''}</span>
+        </a>`).join('') || '<div class="empty small">Sin partidas con este filtro.</div>'}</div>
+    </section>` : `
+    <div class="empty">Aún no registras partidas.<br>
+      <a href="#/partidas/nueva?tipo=online">Importa el log de una partida de Pokémon TCG Live</a> o <a href="#/partidas/nueva?tipo=fisica">registra una partida física</a>.</div>`}`;
+
+  document.getElementById('mFilters')?.addEventListener('change', e => {
+    const f = formData(e.currentTarget);
+    const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v));
+    go(`#/partidas${qs.toString() ? '?' + qs : ''}`);
+  });
+}
+
+function recentForm(list) {
+  const last = list.slice(0, 10);
+  return last.length ? `<span class="form-pills">${last.map(m => `<i class="${m.result}" title="${RES_TXT[m.result]}"></i>`).join('')}</span> últimas ${last.length}` : '';
+}
+
+// Consejos a partir de tus números
+function coachTips(s) {
+  const tips = [];
+  if (s.first.n >= 3 && s.second.n >= 3 && Math.abs((s.first.pct ?? 0) - (s.second.pct ?? 0)) >= 15) {
+    const better = s.first.pct > s.second.pct ? 'primero' : 'segundo';
+    tips.push(`Ganas bastante más yendo <b>${better}</b> (${s.first.pct}% vs ${s.second.pct}%). Si ganas la moneda, considera elegir ir ${better}.`);
+  }
+  const worst = s.byOpp.filter(r => r.n >= 3 && r.k !== 'Sin registrar').sort((a, b) => a.w / a.n - b.w / b.n)[0];
+  if (worst && worst.w / worst.n < 0.45) tips.push(`Tu peor enfrentamiento es contra <b>${esc(worst.k)}</b> (${wlt(worst)}). Prueba cambios en tu lista o practica ese duelo.`);
+  const best = s.byOpp.filter(r => r.n >= 3 && r.k !== 'Sin registrar').sort((a, b) => b.w / b.n - a.w / a.n)[0];
+  if (best && best.w / best.n >= 0.6) tips.push(`Te va muy bien contra <b>${esc(best.k)}</b> (${wlt(best)}).`);
+  if (s.online >= 5 && s.mull / s.online >= 0.35) tips.push(`Haces mulligan en ${Math.round(s.mull / s.online * 100)}% de tus partidas online: revisa cuántos Pokémon básicos llevas.`);
+  if (!tips.length) return '';
+  return `<section class="panel coach"><h2 class="panel-h">💡 Lo que dicen tus números</h2><ul>${tips.map(t => `<li>${t}</li>`).join('')}</ul></section>`;
+}
+
+// Nombres de decks conocidos (metajuego) + mis decks, para sugerir al escribir
+async function deckSuggestions() {
+  const names = new Set();
+  try { const m = await loadMeta(); [...(m.official.decks || []), ...(m.online.decks || [])].slice(0, 120).forEach(d => names.add(d.name)); } catch { /* sin metajuego */ }
+  try { const { decks } = await api('/api/decks'); decks.forEach(d => names.add(d.name)); } catch { /* sin sesión */ }
+  return [...names];
+}
+
+async function viewMatchForm(params, id) {
+  if (!requireLogin()) return;
+  const existing = id ? (await api(`/api/my-matches/${id}`)).match : null;
+  const type = existing ? (existing.source === 'online' ? 'online' : 'fisica') : params.get('tipo') === 'online' ? 'online' : 'fisica';
+  const [names, meta] = await Promise.all([deckSuggestions(), loadMeta().catch(() => null)]);
+  const archetypes = meta ? [...meta.official.decks, ...meta.online.decks] : [];
+  const m = existing || { played_at: new Date().toISOString().slice(0, 10), format: 'bo1', games: [{}] };
+  const back = id ? `#/partidas/${id}` : '#/partidas';
+
+  $app.innerHTML = `
+    ${compNav('partidas')}
+    <p><a href="${back}">← ${id ? 'Volver a la partida' : 'Mis partidas'}</a></p>
+    <div class="page-head"><div><h1>${id ? 'Editar partida' : type === 'online' ? '📋 Importar partida online' : '🃏 Registrar partida física'}</h1>
+      <p class="muted">${type === 'online' ? 'En Pokémon TCG Live, al terminar la partida abre el historial, copia todo el texto y pégalo aquí.' : 'Anota el resultado; con el tiempo verás tus enfrentamientos fuertes y débiles.'}</p></div></div>
+    <datalist id="deckNames">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <form id="mf" class="sell-layout" novalidate>
+      <div class="sell-main">
+        ${type === 'online' ? `
+        <section class="panel step-card">
+          <div class="step-title"><span class="step-num">1</span><div><h2>Pega el log</h2><p class="card-meta">Lo leemos en tu navegador para mostrarte la vista previa.</p></div></div>
+          <textarea name="log" id="logText" rows="9" class="mono" placeholder="Setup&#10;TuNombre chose heads for the opening coin flip.&#10;…">${esc(existing?.log || '')}</textarea>
+          <div id="logPreview"></div>
+        </section>` : ''}
+        <section class="panel step-card">
+          <div class="step-title"><span class="step-num">${type === 'online' ? 2 : 1}</span><div><h2>Decks</h2><p class="card-meta">${type === 'online' ? 'Los adivinamos por los Pokémon que se jugaron; corrígelos si hace falta.' : 'Escribe o elige de la lista.'}</p></div></div>
+          <div class="row">
+            <div class="field"><label>Mi deck</label><input name="my_deck" list="deckNames" maxlength="60" value="${esc(m.my_deck || '')}" placeholder="ej. Dragapult Dusknoir"></div>
+            <div class="field"><label>Deck rival</label><input name="opp_deck" list="deckNames" maxlength="60" value="${esc(m.opp_deck || '')}" placeholder="ej. N's Zoroark"></div>
+            <div class="field"><label>Rival <span class="card-meta">(opcional)</span></label><input name="opp_name" maxlength="40" value="${esc(m.opp_name || '')}"></div>
+          </div>
+        </section>
+        ${type === 'fisica' ? `
+        <section class="panel step-card">
+          <div class="step-title"><span class="step-num">2</span><div><h2>Resultado</h2></div></div>
+          <div class="field"><label>Formato</label>
+            <div class="segmented" id="fmtSel">${[['bo1', 'Bo1 (1 juego)'], ['bo3', 'Bo3 (mejor de 3)']].map(([k, t]) => `<button type="button" data-fmt="${k}" class="${m.format === k ? 'active' : ''}">${t}</button>`).join('')}</div>
+            <input type="hidden" name="format" value="${esc(m.format)}"></div>
+          <div id="gamesBox"></div>
+        </section>` : ''}
+        <section class="panel step-card">
+          <div class="step-title"><span class="step-num">3</span><div><h2>Detalles</h2></div></div>
+          <div class="row">
+            <div class="field"><label>Fecha</label><input name="played_at" type="date" value="${esc(m.played_at)}"></div>
+            <div class="field"><label>Evento <span class="card-meta">(opcional)</span></label><input name="event" maxlength="80" value="${esc(m.event || '')}" placeholder="ej. Liga local, Ladder, Regional"></div>
+          </div>
+          <div class="field"><label>Notas <span class="card-meta">(qué aprendiste, qué cambiarías)</span></label><textarea name="notes" rows="3" maxlength="2000">${esc(m.notes || '')}</textarea></div>
+        </section>
+      </div>
+      <aside class="sell-side"><div class="panel preview-panel">
+        <div class="card-meta preview-label">Resumen</div>
+        <div id="mSummary" class="m-summary"></div>
+        <div class="error" id="mErr"></div>
+        <button class="btn primary big" type="submit">${id ? 'Guardar cambios' : 'Guardar partida'}</button>
+        <a class="btn" href="${back}">Cancelar</a>
+      </div></aside>
+    </form>`;
+
+  const f = document.getElementById('mf');
+  let parsed = null, meName = existing?.me_name || '';
+  let games = (m.games && m.games.length ? m.games : [{}]).map(g => ({ ...g }));
+
+  function renderGames() {
+    const box = document.getElementById('gamesBox'); if (!box) return;
+    const n = f.format.value === 'bo3' ? 3 : 1;
+    while (games.length < n) games.push({});
+    box.innerHTML = games.slice(0, n).map((g, i) => `
+      <div class="game-row">
+        <b>${n > 1 ? `Juego ${i + 1}` : 'Resultado'}</b>
+        <div class="segmented res-sel" data-g="${i}">${['W', 'L', 'T'].map(r => `<button type="button" data-res="${r}" class="${g.result === r ? 'active r' + r : ''}">${RES_TXT[r]}</button>`).join('')}</div>
+        <div class="segmented first-sel" data-g="${i}">${[[true, 'Fui 1.º'], [false, 'Fui 2.º']].map(([v, t]) => `<button type="button" data-first="${v}" class="${g.first === v ? 'active' : ''}">${t}</button>`).join('')}</div>
+        <label class="prize-in">Premios que tomé <input type="number" min="0" max="6" data-pz="${i}" value="${g.prizes_me ?? ''}"></label>
+      </div>`).join('') + (n > 1 ? '<p class="card-meta">Deja en blanco el juego 3 si no se jugó.</p>' : '');
+    renderSummary();
+  }
+  document.getElementById('gamesBox')?.addEventListener('click', e => {
+    const r = e.target.closest('[data-res]'), fs = e.target.closest('[data-first]');
+    if (r) { const i = r.parentElement.dataset.g; games[i].result = games[i].result === r.dataset.res ? null : r.dataset.res; renderGames(); }
+    if (fs) { const i = fs.parentElement.dataset.g; games[i].first = fs.dataset.first === 'true'; renderGames(); }
+  });
+  document.getElementById('gamesBox')?.addEventListener('input', e => { if (e.target.dataset.pz !== undefined) games[e.target.dataset.pz].prizes_me = e.target.value; });
+  document.getElementById('fmtSel')?.addEventListener('click', e => {
+    const b = e.target.closest('[data-fmt]'); if (!b) return;
+    f.format.value = b.dataset.fmt; document.querySelectorAll('#fmtSel button').forEach(x => x.classList.toggle('active', x === b)); renderGames();
+  });
+
+  // Vista previa del log (online)
+  let guessed = { me: false, opp: false };
+  function readLog() {
+    const txt = f.log?.value || '';
+    const box = document.getElementById('logPreview');
+    if (!txt.trim()) { parsed = null; box.innerHTML = ''; renderSummary(); return; }
+    parsed = parseLog(txt);
+    if (parsed.players.length < 2 || !parsed.turns.length) { box.innerHTML = '<p class="error">No reconocemos este texto como un log de Pokémon TCG Live.</p>'; parsed = null; renderSummary(); return; }
+    if (!parsed.players.includes(meName)) meName = parsed.me;
+    const opp = parsed.players.find(p => p !== meName);
+    // Decks adivinados (solo si el usuario no escribió uno)
+    if (!f.my_deck.value || guessed.me) { f.my_deck.value = guessDeck(parsed.pokemon[meName] || [], archetypes); guessed.me = true; }
+    if (!f.opp_deck.value || guessed.opp) { f.opp_deck.value = guessDeck(parsed.pokemon[opp] || [], archetypes); guessed.opp = true; }
+    if (!f.opp_name.value || f.opp_name.value === parsed.players.find(p => p !== opp)) f.opp_name.value = opp;
+    box.innerHTML = `
+      <div class="log-ok">✔ Log leído: ${parsed.turns.length} turnos · ${esc(parsed.players.join(' vs '))}</div>
+      <div class="field"><label>¿Cuál eres tú?</label>
+        <div class="segmented" id="meSel">${parsed.players.map(p => `<button type="button" data-me="${esc(p)}" class="${p === meName ? 'active' : ''}">${esc(p)}</button>`).join('')}</div></div>`;
+    document.getElementById('meSel').addEventListener('click', e => {
+      const b = e.target.closest('[data-me]'); if (!b || b.dataset.me === meName) return;
+      meName = b.dataset.me; guessed = { me: true, opp: true }; f.opp_name.value = ''; readLog();
+    });
+    renderSummary();
+  }
+  f.log?.addEventListener('input', () => { clearTimeout(readLog.t); readLog.t = setTimeout(readLog, 250); });
+  ['my_deck', 'opp_deck'].forEach(k => f[k].addEventListener('input', () => { guessed[k === 'my_deck' ? 'me' : 'opp'] = false; renderSummary(); }));
+
+  function renderSummary() {
+    const el = document.getElementById('mSummary');
+    if (type === 'online') {
+      if (!parsed) { el.innerHTML = '<p class="card-meta">Pega el log para ver el resumen.</p>'; return; }
+      const opp = parsed.players.find(p => p !== meName);
+      const res = parsed.winner ? (parsed.winner === meName ? 'W' : 'L') : 'T';
+      el.innerHTML = `<div class="big-res ${res}">${RES_TXT[res]}</div>
+        <ul class="checklist">
+          <li>${parsed.first === meName ? 'Fuiste primero' : 'Fuiste segundo'}${parsed.coin.winner ? ` · ${parsed.coin.winner === meName ? 'ganaste' : 'perdiste'} la moneda` : ''}</li>
+          <li>Premios: ${parsed.prizes[meName] || 0} – ${parsed.prizes[opp] || 0}</li>
+          <li>Mulligans: tú ${parsed.mulligans[meName] || 0} · rival ${parsed.mulligans[opp] || 0}</li>
+          <li>${esc(f.my_deck.value || '¿tu deck?')} vs ${esc(f.opp_deck.value || '¿deck rival?')}</li></ul>`;
+    } else {
+      const done = games.filter(g => g.result);
+      const w = done.filter(g => g.result === 'W').length, l = done.filter(g => g.result === 'L').length;
+      const res = !done.length ? null : f.format.value === 'bo1' ? done[0].result : w > l ? 'W' : l > w ? 'L' : 'T';
+      el.innerHTML = res ? `<div class="big-res ${res}">${RES_TXT[res]}${f.format.value === 'bo3' ? ` ${w}-${l}` : ''}</div>` : '<p class="card-meta">Marca el resultado.</p>';
+    }
+  }
+
+  f.addEventListener('submit', async e => {
+    e.preventDefault();
+    const err = document.getElementById('mErr'); err.textContent = '';
+    const body = { ...formData(f), source: type === 'online' ? 'online' : 'physical', me_name: meName };
+    if (type === 'online') { if (!parsed) { err.textContent = 'Pega un log válido.'; return; } body.games = []; body.format = 'bo1'; }
+    else {
+      body.games = games.slice(0, f.format.value === 'bo3' ? 3 : 1).filter(g => g.result);
+      if (!body.games.length) { err.textContent = 'Marca el resultado.'; return; }
+    }
+    const btn = f.querySelector('[type=submit]'); btn.disabled = true;
+    try {
+      const { match } = await api(id ? `/api/my-matches/${id}` : '/api/my-matches', { method: id ? 'PUT' : 'POST', body });
+      toast(id ? 'Partida actualizada' : 'Partida guardada'); go(`#/partidas/${match.id}`);
+    } catch (e2) { err.textContent = e2.message; btn.disabled = false; }
+  });
+
+  if (type === 'online') readLog(); else renderGames();
+  renderSummary();
+}
+
+async function viewMatch(id) {
+  if (!requireLogin()) return;
+  const { match: m } = await api(`/api/my-matches/${id}`);
+  const st = m.log ? parseLog(m.log) : null;
+  if (st && m.me_name && st.players.includes(m.me_name)) { st.me = m.me_name; st.opp = st.players.find(p => p !== m.me_name); }
+  const an = st ? analyze(st) : null;
+  const meName = st?.me, oppName = st?.opp;
+  const res = m.result;
+
+  $app.innerHTML = `
+    ${compNav('partidas')}
+    <p><a href="#/partidas">← Mis partidas</a></p>
+    <div class="match-hero panel">
+      <div class="big-res ${res}">${RES_TXT[res]}${m.format === 'bo3' ? ` ${m.games.filter(g => g.result === 'W').length}-${m.games.filter(g => g.result === 'L').length}` : ''}</div>
+      <div class="mh-main">
+        <h1>${esc(m.my_deck || 'Mi deck')} <span class="muted">vs</span> ${esc(m.opp_deck || 'Deck rival')}</h1>
+        <p class="card-meta">${m.opp_name ? `Contra ${esc(m.opp_name)} · ` : ''}${m.event ? esc(m.event) + ' · ' : ''}${fmtShort(m.played_at)} · ${m.source === 'online' ? '🌐 Pokémon TCG Live' : '🃏 Partida física'}</p>
+      </div>
+      <div class="t-actions"><a class="btn small" href="#/partidas/${m.id}/editar">Editar</a><button class="btn small danger" id="delMatch">Borrar</button></div>
+    </div>
+    ${an ? `
+    <div class="stat-tiles">
+      <div class="stat-tile"><span>Turno</span><b>${an.wentFirst ? 'Fuiste 1.º' : 'Fuiste 2.º'}</b><small>${st.coin.winner ? (st.coin.winner === meName ? 'Ganaste la moneda' : 'Perdiste la moneda') + (st.coin.choice ? ` · se eligió ir ${st.coin.choice === 'first' ? 'primero' : 'segundo'}` : '') : ''}</small></div>
+      <div class="stat-tile"><span>Premios</span><b>${st.prizes[meName] || 0} – ${st.prizes[oppName] || 0}</b><small>${st.turns.length} turnos en total</small></div>
+      <div class="stat-tile"><span>Daño hecho / recibido</span><b>${an.damage.me} / ${an.damage.opp}</b><small>suma de ataques</small></div>
+      <div class="stat-tile"><span>Mulligans</span><b>${st.mulligans[meName] || 0} / ${st.mulligans[oppName] || 0}</b><small>tú / rival</small></div>
+    </div>
+    <section class="panel"><div class="panel-title"><h2>Carrera de premios</h2><span class="card-meta">Premios tomados después de cada turno</span></div>
+      ${lineChart('prizeChart', { labels: an.race.map(r => `T${r.turn}`), height: 220, yMax: 6, yFmt: v => String(Math.round(v)),
+        series: [{ name: meName, values: an.race.map(r => r.me) }, { name: oppName, values: an.race.map(r => r.opp) }] })}
+    </section>
+    <section class="panel coach"><h2 class="panel-h">🧠 Puntos a revisar</h2>
+      ${an.tips.length ? `<ul class="tips">${an.tips.map(t => `<li class="tip ${t.level}">
+        <span class="tip-ico">${t.level === 'warn' ? '⚠️' : t.level === 'good' ? '✅' : '💡'}</span>
+        <div><b>${esc(t.title)}</b><p>${esc(t.text)}</p>${t.turn ? `<a href="#t${t.turn}" class="card-meta" data-jump="${t.turn}">Ver turno ${t.turn} ↓</a>` : ''}</div></li>`).join('')}</ul>`
+        : '<p class="card-meta">No encontramos nada llamativo. ¡Buena partida!</p>'}
+      <p class="card-meta">Son pistas automáticas a partir del log; tú decides si fueron errores o la mejor jugada posible.</p>
+    </section>
+    <section class="panel">
+      <div class="panel-title"><h2>Turno por turno</h2>
+        <label class="switch small-switch"><input type="checkbox" id="onlyMine"><span class="switch-ui"></span><span><b>Solo mis turnos</b></span></label></div>
+      ${st.openingHand.length ? `<div class="opening"><b>Tu mano inicial:</b> ${st.openingHand.map(esc).join(', ')}</div>` : ''}
+      <ol class="timeline">${st.turns.map(t => turnCard(t, meName)).join('')}</ol>
+    </section>
+    <details class="panel raw-log"><summary>Ver log original</summary><pre>${esc(m.log)}</pre></details>` : `
+    <section class="panel"><h2 class="panel-h">Juegos</h2>
+      <table class="mini-table"><thead><tr><th>Juego</th><th>Resultado</th><th>Turno</th><th>Premios tomados</th></tr></thead>
+      <tbody>${m.games.map((g, i) => `<tr><td>${i + 1}</td><td><span class="res ${g.result}">${g.result === 'W' ? 'V' : g.result === 'L' ? 'D' : 'E'}</span> ${RES_TXT[g.result]}</td>
+        <td>${g.first === true ? 'Fui 1.º' : g.first === false ? 'Fui 2.º' : '—'}</td><td>${g.prizes_me ?? '—'}</td></tr>`).join('')}</tbody></table></section>`}
+    ${m.notes ? `<section class="panel"><h2 class="panel-h">Notas</h2><p>${esc(m.notes).replace(/\n/g, '<br>')}</p></section>` : ''}`;
+
+  document.getElementById('delMatch').addEventListener('click', async () => {
+    if (!confirm('¿Borrar esta partida? No se puede deshacer.')) return;
+    await api(`/api/my-matches/${m.id}`, { method: 'DELETE' }); toast('Partida borrada'); go('#/partidas');
+  });
+  document.getElementById('onlyMine')?.addEventListener('change', e => {
+    $app.querySelectorAll('.turn').forEach(li => { li.hidden = e.target.checked && !li.classList.contains('mine'); });
+  });
+  $app.querySelectorAll('[data-jump]').forEach(a => a.addEventListener('click', ev => {
+    ev.preventDefault(); const el = document.getElementById(`t${a.dataset.jump}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.classList.add('flash'); setTimeout(() => el?.classList.remove('flash'), 1400);
+  }));
+}
+
+function turnCard(t, me) {
+  const mine = t.player === me;
+  const lines = turnSummary(t);
+  return `<li class="turn ${mine ? 'mine' : 'theirs'}" id="t${t.n}">
+    <div class="turn-head"><span class="turn-n">T${t.n}</span><b>${mine ? 'Tu turno' : 'Rival'} ${t.number}</b>
+      <span class="card-meta">${t.draws} carta(s) obtenidas${t.supporters.length ? '' : ' · sin Partidario'}</span>
+      ${t.prizesTaken ? `<span class="prize-chip">+${t.prizesTaken} premio${t.prizesTaken > 1 ? 's' : ''}</span>` : ''}</div>
+    ${lines.length ? `<ul class="turn-lines">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
+    ${t.attacks.map(a => `<div class="atk">⚔️ <b>${esc(a.attacker)}</b> usó <b>${esc(a.attack)}</b> contra ${esc(a.target)} · <b>${a.damage}</b> de daño</div>`).join('')}
+    ${t.kos.map(k => `<div class="ko">💥 ${k.owner === me ? 'Tu' : 'El'} ${esc(k.pokemon)}${k.owner === me ? '' : ' rival'} quedó fuera de combate${k.selfInflicted ? ' (por su propio efecto)' : ''}</div>`).join('')}
+  </li>`;
+}
+
 // ---------- Administración ----------
 
 async function viewAdmin(params) {
@@ -2178,6 +2759,14 @@ async function route(parts, params) {
       case 'torneos': return parts[1] === 'nuevo' ? viewTournamentForm() : parts[1] === 'importar' ? viewTdfImport() : await viewTournaments();
       case 'torneo': return await viewTournament(parts[1]);
       case 'admin': return await viewAdmin(params);
+      case 'competitivo':
+        if (parts[1] === 'oficiales' || parts[1] === 'online') return await viewCompEvents(parts[1]);
+        return await viewMeta(params);
+      case 'partidas':
+        if (parts[1] === 'nueva') return await viewMatchForm(params);
+        if (parts[1] && parts[2] === 'editar') return await viewMatchForm(params, parts[1]);
+        if (parts[1]) return await viewMatch(parts[1]);
+        return await viewMatches(params);
       case 'decks':
         if (parts[1] === 'nuevo') return await viewDeckEditor();
         if (parts[1] && parts[2] === 'editar') return await viewDeckEditor(parts[1]);

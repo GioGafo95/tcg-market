@@ -74,3 +74,6 @@ jobs:
           QA_DOMAIN: ${{ vars.QA_DOMAIN || 'tcg.macai.com.mx' }}
       - name: Verificar QA
         run: node scripts/smoke-test.mjs "${{ vars.QA_URL }}" --readonly
+      - name: Preparar metajuego
+        # Arma la foto del metajuego si aún no existe o tiene más de 5 h (no detiene el despliegue si Limitless falla)
+        run: curl -sS --max-time 60 -X POST "${{ vars.QA_URL }}/api/meta/refresh" || echo "No se pudo actualizar el metajuego ahora"

@@ -108,7 +108,24 @@ db.exec(`
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_decks_user ON decks(user_id);
+
+  -- Registro personal de partidas (físicas u online con el log de Pokémon TCG Live)
+  CREATE TABLE IF NOT EXISTS match_logs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    data        TEXT NOT NULL,            -- JSON con los campos de la partida
+    log         TEXT DEFAULT '',          -- log original (partidas online)
+    played_at   TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_match_logs_user ON match_logs(user_id, played_at);
+
+  -- Valores sueltos (p. ej. la foto del metajuego en caché)
+  CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')));
 `);
+// Deck con el que juega cada inscrito en un torneo de la app (para las estadísticas del metajuego local)
+if (!db.prepare('PRAGMA table_info(tournament_players)').all().some(c => c.name === 'deck'))
+  db.exec("ALTER TABLE tournament_players ADD COLUMN deck TEXT DEFAULT ''");
 
 // Torneos: origen ('app' o 'tdf'), ID del torneo en TOM y datos importados (JSON)
 const tCols = db.prepare('PRAGMA table_info(tournaments)').all().map(c => c.name);
@@ -224,6 +241,41 @@ export const repo = {
     db.prepare(`UPDATE users SET display_name = ?, first_name = ?, last_name = ?, location = ?, contact = ? WHERE id = ?`)
       .run(display_name, first_name, last_name, location, contact, id);
     return this.getUser(id);
+  },
+
+  // ---------- Deck de cada jugador en un torneo de la app ----------
+  async setTournamentDeck(id, userId, deck) {
+    db.prepare('UPDATE tournament_players SET deck = ? WHERE tournament_id = ? AND user_id = ?').run(deck, Number(id), userId);
+  },
+
+  // ---------- Registro personal de partidas ----------
+  async listMatchLogs(userId) {
+    return db.prepare('SELECT id, data, played_at, created_at FROM match_logs WHERE user_id = ? ORDER BY played_at DESC, id DESC LIMIT 1000')
+      .all(userId).map(r => ({ ...JSON.parse(r.data), id: String(r.id), user_id: userId, played_at: r.played_at, created_at: iso(r.created_at) }));
+  },
+  async getMatchLog(id) {
+    const r = db.prepare('SELECT * FROM match_logs WHERE id = ?').get(Number(id));
+    return r && { ...JSON.parse(r.data), id: String(r.id), user_id: r.user_id, played_at: r.played_at, log: r.log, created_at: iso(r.created_at) };
+  },
+  async createMatchLog(userId, m) {
+    const { log = '', played_at, ...data } = m;
+    const { lastInsertRowid } = db.prepare('INSERT INTO match_logs (user_id, data, log, played_at) VALUES (?, ?, ?, ?)')
+      .run(userId, JSON.stringify(data), log, played_at);
+    return this.getMatchLog(lastInsertRowid);
+  },
+  async updateMatchLog(id, m) {
+    const { log, played_at, ...data } = m;
+    db.prepare('UPDATE match_logs SET data = ?, played_at = ?' + (log !== undefined ? ', log = ?' : '') + ' WHERE id = ?')
+      .run(...[JSON.stringify(data), played_at, ...(log !== undefined ? [log] : []), Number(id)]);
+    return this.getMatchLog(id);
+  },
+  async deleteMatchLog(id) { db.prepare('DELETE FROM match_logs WHERE id = ?').run(Number(id)); },
+
+  // ---------- Valores sueltos (caché) ----------
+  async getKV(key) { const r = db.prepare('SELECT value FROM kv WHERE key = ?').get(key); return r ? JSON.parse(r.value) : null; },
+  async putKV(key, value) {
+    db.prepare("INSERT INTO kv (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+      .run(key, JSON.stringify(value));
   },
 
   // ---------- Decks ----------
@@ -386,7 +438,7 @@ export const repo = {
   async deleteTournament(id) { db.prepare('DELETE FROM tournaments WHERE id = ?').run(Number(id)); },
 
   async getTournamentPlayers(id) {
-    return db.prepare(`SELECT p.user_id, p.joined_at, u.username, u.display_name, u.location, u.pokemon_id
+    return db.prepare(`SELECT p.user_id, p.joined_at, p.deck, u.username, u.display_name, u.location, u.pokemon_id
       FROM tournament_players p JOIN users u ON u.id = p.user_id WHERE p.tournament_id = ? ORDER BY p.joined_at, p.user_id`)
       .all(Number(id)).map(p => ({ ...p, joined_at: iso(p.joined_at) }));
   },

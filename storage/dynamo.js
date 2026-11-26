@@ -130,6 +130,50 @@ export const repo = {
     return strip(out.Attributes);
   },
 
+  // ---------- Deck de cada jugador en un torneo de la app ----------
+  async setTournamentDeck(id, userId, deck) {
+    await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: `PLAYER#${userId}` },
+      UpdateExpression: 'SET deck = :d', ExpressionAttributeValues: { ':d': deck }, ConditionExpression: 'attribute_exists(PK)' }));
+  },
+
+  // ---------- Registro personal de partidas ----------
+  // MLOG#<id> / MLOG, con GSI1 = MLOGS#<userId> / fecha de la partida
+  async listMatchLogs(userId) {
+    const items = await queryAll({ TableName: TABLE, IndexName: 'GSI1', KeyConditionExpression: 'GSI1PK = :p',
+      ExpressionAttributeValues: { ':p': `MLOGS#${userId}` }, ScanIndexForward: false });
+    return items.map(strip).map(({ log, ...m }) => m).slice(0, 1000);
+  },
+  async getMatchLog(id) {
+    const out = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `MLOG#${id}`, SK: 'MLOG' } }));
+    return strip(out.Item);
+  },
+  async createMatchLog(userId, m) {
+    const id = newId();
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: {
+      PK: `MLOG#${id}`, SK: 'MLOG', type: 'matchlog', GSI1PK: `MLOGS#${userId}`, GSI1SK: `${m.played_at}#${id}`,
+      ...m, id, user_id: userId, created_at: now(),
+    } }));
+    return this.getMatchLog(id);
+  },
+  async updateMatchLog(id, m) {
+    const cur = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `MLOG#${id}`, SK: 'MLOG' } }));
+    if (!cur.Item) return null;
+    const item = { ...cur.Item, ...Object.fromEntries(Object.entries(m).filter(([, v]) => v !== undefined)) };
+    item.GSI1SK = `${item.played_at}#${id}`;
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
+    return this.getMatchLog(id);
+  },
+  async deleteMatchLog(id) { await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: `MLOG#${id}`, SK: 'MLOG' } })); },
+
+  // ---------- Valores sueltos (caché) ----------
+  async getKV(key) {
+    const out = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `KV#${key}`, SK: 'KV' } }));
+    return out.Item ? JSON.parse(out.Item.value) : null;
+  },
+  async putKV(key, value) {
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: { PK: `KV#${key}`, SK: 'KV', type: 'kv', value: JSON.stringify(value), updated_at: now() } }));
+  },
+
   // ---------- Decks ----------
   // DECK#<id> / DECK, con GSI1 = DECKS#<userId> / fecha de actualización (no se mezcla con las cartas en venta)
   async listDecks(userId, { onlyPublic = false } = {}) {
@@ -436,7 +480,7 @@ export const repo = {
     return items
       .map(i => {
         const u = users.get(i.user_id) || {};
-        return { user_id: i.user_id, joined_at: i.joined_at, username: u.username, display_name: u.display_name,
+        return { user_id: i.user_id, joined_at: i.joined_at, deck: i.deck || '', username: u.username, display_name: u.display_name,
                  location: u.location, pokemon_id: u.pokemon_id || '' };
       })
       .sort((a, b) => a.joined_at.localeCompare(b.joined_at));
