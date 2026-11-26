@@ -123,6 +123,7 @@ Resources:
               - dynamodb:Query
               - dynamodb:BatchGetItem
               - dynamodb:ConditionCheckItem
+              - dynamodb:Scan              # lista de usuarios del panel de administración
             Resource: [!GetAtt Table.Arn, !Sub '${Table.Arn}/index/*']
           - Sid: Archivos
             Effect: Allow

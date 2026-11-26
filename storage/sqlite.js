@@ -107,9 +107,11 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_tournaments_tdf ON tournaments(td
 
 // Migraciones de columnas añadidas después de la primera versión
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const name of ['first_name', 'last_name', 'pokemon_id']) {
+for (const name of ['first_name', 'last_name', 'pokemon_id', 'role']) {
   if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} TEXT DEFAULT ''`);
 }
+// Administración: role = 'admin' para administradores; blocked = 1 para cuentas suspendidas
+if (!userCols.includes('blocked')) db.exec('ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0');
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_pokemon_id ON users(pokemon_id) WHERE pokemon_id <> ''");
 const cols = db.prepare('PRAGMA table_info(listings)').all().map(c => c.name);
 for (const [name, def] of Object.entries({
@@ -147,17 +149,17 @@ if (!listingsSql.includes("'any'")) {
 
 // SQLite guarda fechas como "YYYY-MM-DD HH:MM:SS" (UTC); se exponen en ISO 8601
 const iso = v => (v && !v.includes('T') ? v.replace(' ', 'T') + 'Z' : v);
-const userOut = u => u && { ...u, created_at: iso(u.created_at) };
+const userOut = u => u && { ...u, blocked: !!u.blocked, created_at: iso(u.created_at) };
 
 const LISTING_SELECT = `
-  SELECT l.*, u.username, u.display_name, u.location, u.contact
+  SELECT l.*, u.username, u.display_name, u.location, u.contact, u.blocked AS seller_blocked
   FROM listings l JOIN users u ON u.id = l.user_id`;
 
 function listingOut(row) {
   if (!row) return null;
   const photos = db.prepare('SELECT id, filename FROM listing_photos WHERE listing_id = ? ORDER BY position, id').all(row.id)
     .map(p => ({ id: String(p.id), filename: p.filename }));
-  return { ...row, created_at: iso(row.created_at), updated_at: iso(row.updated_at), photos };
+  return { ...row, seller_blocked: !!row.seller_blocked, created_at: iso(row.created_at), updated_at: iso(row.updated_at), photos };
 }
 
 const TOURNAMENT_SELECT = `
@@ -202,6 +204,17 @@ export const repo = {
       .run(display_name, first_name, last_name, location, contact, id);
     return this.getUser(id);
   },
+
+  // ---------- Administración de usuarios ----------
+  async listUsers() {
+    return db.prepare('SELECT * FROM users ORDER BY created_at DESC, id DESC').all().map(userOut);
+  },
+  async setUserAdminFlags(id, { role, blocked }) {
+    db.prepare('UPDATE users SET role = ?, blocked = ? WHERE id = ?').run(role || '', blocked ? 1 : 0, id);
+    return this.getUser(id);
+  },
+  // Borra la cuenta; sesiones, publicaciones y registros de fotos se van en cascada (los archivos los borra el servidor)
+  async deleteUser(id) { db.prepare('DELETE FROM users WHERE id = ?').run(id); },
 
   // ---------- Sesiones ----------
   async createSession(token, userId, expiresAt) {

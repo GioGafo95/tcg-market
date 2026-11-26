@@ -733,3 +733,19 @@ table.pairings select { min-width: 190px; padding: .4rem .6rem; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   html { scroll-behavior: auto; }
 }
+
+/* ---------- Administración ---------- */
+.badge.admin { background: linear-gradient(135deg, #ffe08a, var(--gold)); color: #5a3d00; }
+.admin-link { border-color: rgba(255, 209, 102, .6) !important; }
+.admin-note {
+  background: #fff6d6; color: var(--ink); border: 1px solid #f3d27a; border-radius: 12px;
+  padding: .7rem .9rem; margin-bottom: 1rem; font-size: .92rem;
+}
+.admin-note a { color: #9a5b00; }
+.admin-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .8rem; margin-bottom: 1rem; }
+.admin-stat { display: flex; flex-direction: column; gap: .2rem; padding: 1rem; background: var(--cream-2); box-shadow: none; }
+.admin-stat b { font-family: var(--font-title); font-size: 1.8rem; color: var(--ink); }
+.panel a.tab { text-decoration: none; }
+.admin-dlg { max-width: 560px; width: calc(100% - 2rem); border: 0; }
+.admin-dlg::backdrop { background: rgba(20, 12, 45, .6); }
+.panel a.tab.active { color: #fff; background: linear-gradient(135deg, var(--violet), var(--pink)); }

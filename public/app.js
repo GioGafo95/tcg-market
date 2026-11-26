@@ -165,6 +165,7 @@ function renderNav() {
        <a class="btn primary small" href="#/vender">+ Vender carta</a>
        <a class="btn small" href="#/mis-cartas">Mis publicaciones</a>
        <a class="btn small" href="#/perfil">Mi perfil</a>
+       ${currentUser.is_admin ? '<a class="btn small admin-link" href="#/admin">🛡 Admin</a>' : ''}
        <span class="nav-user">@${esc(currentUser.username)}</span>
        <button class="btn small" id="logout">Salir</button>`
     : `<a class="btn small" href="#/accesorios">🎒 Accesorios</a>
@@ -398,7 +399,16 @@ async function viewListing(id) {
           ${l.location ? `<div class="muted">📍 ${esc(l.location)}</div>` : ''}
           ${l.contact ? `<div>Contacto: ${esc(l.contact)}</div>${contactButtons(l.contact, l.card_name)}` : '<div class="muted">El vendedor no ha dejado un contacto.</div>'}
         </div>
-        ${mine ? `<p style="margin-top:1rem"><a class="btn" href="#/editar/${l.id}">Editar mi publicación</a></p>` : ''}
+        ${mine ? `<p style="margin-top:1rem"><a class="btn" href="#/editar/${l.id}">Editar mi publicación</a></p>`
+          : currentUser?.is_admin ? `
+          <div class="admin-note" style="margin-top:1rem">🛡 Administración
+            ${l.seller_blocked ? '<span class="badge sold">Cuenta suspendida: no se ve en el catálogo</span>' : ''}
+            <div class="t-actions" style="margin-top:.5rem">
+              <a class="btn small" href="#/editar/${l.id}">Editar</a>
+              <button class="btn small" id="admToggle">${l.status === 'sold' ? 'Reactivar' : 'Marcar vendida'}</button>
+              <button class="btn small danger" id="admDelete">Borrar</button>
+            </div>
+          </div>` : ''}
       </div>
     </div>`;
 
@@ -409,6 +419,15 @@ async function viewListing(id) {
     label.textContent = g.label; label.classList.toggle('real', g.real);
     $app.querySelectorAll('.thumb').forEach(x => x.classList.toggle('active', x === b));
   }));
+  document.getElementById('admToggle')?.addEventListener('click', async () => {
+    await api(`/api/listings/${l.id}/status`, { method: 'PATCH', body: { status: l.status === 'sold' ? 'available' : 'sold' } });
+    toast('Publicación actualizada'); viewListing(l.id);
+  });
+  document.getElementById('admDelete')?.addEventListener('click', async () => {
+    if (!confirm(`¿Borrar la publicación "${l.card_name}" de @${l.username}? No se puede deshacer.`)) return;
+    await api(`/api/listings/${l.id}`, { method: 'DELETE' });
+    toast('Publicación borrada'); go('#/admin?tab=listings');
+  });
 }
 
 async function viewSeller(username) {
@@ -662,8 +681,16 @@ async function viewListingForm(id, kind = 'card') {
        : { game: 'pokemon', condition: 'NM', language: 'Español', quantity: 1, price: '' },
     api('/api/fx').catch(() => ({})),
   ]);
-  if (id && l.user_id !== currentUser.id) { $app.innerHTML = '<div class="empty">Esta publicación no es tuya.</div>'; return; }
-  if ((id ? l.kind : kind) === 'accessory') return renderAccessoryForm(l, id, fxInfo);
+  const othersListing = id && String(l.user_id) !== String(currentUser.id);
+  if (othersListing && !currentUser.is_admin) { $app.innerHTML = '<div class="empty">Esta publicación no es tuya.</div>'; return; }
+  if ((id ? l.kind : kind) === 'accessory') renderAccessoryForm(l, id, fxInfo);
+  else renderCardForm(l, id, fxInfo);
+  // Un administrador editando la publicación de otra persona: aviso arriba del formulario
+  if (othersListing) $app.querySelector('.form-wide')?.insertAdjacentHTML('afterbegin',
+    `<div class="admin-note">🛡 Estás editando como administrador la publicación de <b>@${esc(l.username)}</b>. Los cambios se guardan a su nombre. <a href="#/admin?tab=listings">Volver al panel</a></div>`);
+}
+
+function renderCardForm(l, id, fxInfo) {
   // Fotos obligatorias solo si la carta vale más de US$2.50 (mercado o precio del vendedor; el servidor lo vuelve a revisar)
   const PHOTO_MIN_USD = fxInfo.photos?.min_usd ?? 2.5;
   const usdRate = fxInfo.fx?.rate || fxInfo.photos?.fallback_rate || 17;
@@ -1286,6 +1313,170 @@ function viewTdfImport() {
   drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) send(e.dataTransfer.files[0]); });
 }
 
+// ---------- Administración ----------
+
+async function viewAdmin(params) {
+  if (!requireLogin()) return;
+  if (!currentUser.is_admin) { $app.innerHTML = '<div class="empty">Solo los administradores pueden ver esta página.</div>'; return; }
+  const tab = ['users', 'listings'].includes(params.get('tab')) ? params.get('tab') : 'summary';
+  const { summary: s, users, listings } = await api('/api/admin/overview');
+  const tabLink = (k, label) => `<a class="tab ${tab === k ? 'active' : ''}" href="#/admin${k === 'summary' ? '' : `?tab=${k}`}">${label}</a>`;
+  const stat = (n, label) => `<div class="panel admin-stat"><b>${n}</b><span class="muted">${label}</span></div>`;
+  const userStatus = u => [u.is_admin ? '<span class="badge admin">Admin</span>' : '',
+    u.blocked ? '<span class="badge sold">Suspendida</span>' : '<span class="badge cond">Activa</span>'].join(' ');
+
+  $app.innerHTML = `
+    <div class="hero"><div><h1>🛡 Administración</h1>
+      <p class="muted">Gestiona cuentas y todas las publicaciones de Macai TCG.</p></div></div>
+    <div class="panel">
+      <div class="tabs">${tabLink('summary', 'Resumen')}${tabLink('users', `Usuarios (${s.users})`)}${tabLink('listings', `Publicaciones (${listings.length})`)}</div>
+      <div id="admBody"></div>
+    </div>
+    <dialog id="userDlg" class="panel admin-dlg"></dialog>`;
+  const $body = document.getElementById('admBody');
+
+  if (tab === 'summary') {
+    $body.innerHTML = `
+      <div class="admin-stats">
+        ${stat(s.users, 'cuentas')}${stat(s.admins, 'administradores')}${stat(s.blocked, 'suspendidas')}
+        ${stat(s.listings_available, 'publicaciones disponibles')}${stat(s.listings_sold, 'vendidas')}
+        ${stat(s.accessories, 'accesorios')}${stat(s.tournaments, 'torneos')}
+      </div>
+      <p class="card-meta">Como administrador puedes editar, marcar como vendida o borrar cualquier publicación, gestionar cualquier torneo,
+        editar datos de las cuentas, nombrar administradores y suspender o borrar cuentas.</p>`;
+  }
+
+  if (tab === 'users') {
+    $body.innerHTML = `
+      <div class="field"><input id="uq" placeholder="Buscar por nombre, usuario, correo, teléfono o zona" autocomplete="off"></div>
+      <div style="overflow-x:auto"><table class="mine">
+        <thead><tr><th>Cuenta</th><th>Contacto</th><th>Publicaciones</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="uRows"></tbody></table></div>`;
+    const paint = () => {
+      const q = document.getElementById('uq').value.trim().toLowerCase();
+      const rows = users.filter(u => !q || [u.display_name, u.username, u.email, u.contact, u.location].some(v => (v || '').toLowerCase().includes(q)));
+      document.getElementById('uRows').innerHTML = rows.map(u => `
+        <tr>
+          <td><b>${esc(u.display_name)}</b> <a href="#/vendedor/${encodeURIComponent(u.username)}">@${esc(u.username)}</a>
+            <div class="card-meta">Desde ${fmtDay(u.created_at)}${u.pokemon_id ? ` · ID Pokémon ${esc(u.pokemon_id)}` : ''}</div></td>
+          <td>${esc(u.email)}<div class="card-meta">${esc(u.contact || '—')} · ${esc(u.location || '—')}</div></td>
+          <td>${u.listings.available} disponibles<div class="card-meta">${u.listings.sold} vendidas</div></td>
+          <td>${userStatus(u)}</td>
+          <td class="actions">
+            <button class="btn small" data-edit="${esc(u.id)}">Editar</button>
+            ${String(u.id) === String(currentUser.id) ? '<span class="card-meta">(tú)</span>' : `
+              <button class="btn small" data-admin="${esc(u.id)}">${u.is_admin ? 'Quitar admin' : 'Hacer admin'}</button>
+              <button class="btn small" data-block="${esc(u.id)}">${u.blocked ? 'Reactivar' : 'Suspender'}</button>
+              <button class="btn small danger" data-deluser="${esc(u.id)}">Borrar</button>`}
+          </td>
+        </tr>`).join('') || '<tr><td colspan="5" class="muted">Sin resultados.</td></tr>';
+      labelTables($body);
+    };
+    document.getElementById('uq').addEventListener('input', paint);
+    paint();
+
+    const find = id => users.find(u => String(u.id) === String(id));
+    const save = async (u, body, msg) => { await api(`/api/admin/users/${u.id}`, { method: 'PUT', body }); toast(msg); viewAdmin(params); };
+    $body.addEventListener('click', async e => {
+      const b = e.target.closest('button'); if (!b) return;
+      try {
+        if (b.dataset.admin) {
+          const u = find(b.dataset.admin);
+          if (!confirm(u.is_admin ? `¿Quitar el rol de administrador a @${u.username}?` : `¿Hacer administrador a @${u.username}? Podrá gestionar todo el sitio.`)) return;
+          await save(u, { is_admin: !u.is_admin }, u.is_admin ? 'Ya no es administrador' : 'Ahora es administrador');
+        } else if (b.dataset.block) {
+          const u = find(b.dataset.block);
+          if (!u.blocked && !confirm(`¿Suspender a @${u.username}? No podrá entrar y sus publicaciones dejarán de verse en el catálogo.`)) return;
+          await save(u, { blocked: !u.blocked }, u.blocked ? 'Cuenta reactivada' : 'Cuenta suspendida');
+        } else if (b.dataset.deluser) {
+          const u = find(b.dataset.deluser);
+          if (!confirm(`¿Borrar la cuenta de @${u.username} y sus ${u.listings.available + u.listings.sold} publicaciones con fotos? No se puede deshacer.`)) return;
+          await api(`/api/admin/users/${u.id}`, { method: 'DELETE' });
+          toast('Cuenta borrada'); viewAdmin(params);
+        } else if (b.dataset.edit) {
+          openUserDialog(find(b.dataset.edit));
+        }
+      } catch (err) { toast(err.message); }
+    });
+
+    function openUserDialog(u) {
+      const dlg = document.getElementById('userDlg');
+      dlg.innerHTML = `
+        <h2>Editar @${esc(u.username)}</h2>
+        <form id="uf" method="dialog">
+          ${profileFields(u)}
+          <p class="card-meta">Correo: ${esc(u.email)} (no editable)</p>
+          <p class="error" id="ufErr"></p>
+          <div class="t-actions"><button class="btn primary" type="submit">Guardar</button><button class="btn" type="button" id="ufCancel">Cancelar</button></div>
+        </form>`;
+      dlg.showModal();
+      document.getElementById('ufCancel').onclick = () => dlg.close();
+      document.getElementById('uf').addEventListener('submit', async e => {
+        e.preventDefault();
+        try {
+          await api(`/api/admin/users/${u.id}`, { method: 'PUT', body: formData(e.target) });
+          dlg.close(); toast('Datos guardados'); viewAdmin(params);
+        } catch (err) { document.getElementById('ufErr').textContent = err.message; }
+      });
+    }
+  }
+
+  if (tab === 'listings') {
+    $body.innerHTML = `
+      <div class="row">
+        <div class="field"><input id="lq" placeholder="Buscar por carta, expansión, código o vendedor" autocomplete="off"></div>
+        <div class="field"><select id="ls">
+          <option value="">Todas</option><option value="available">Disponibles</option><option value="sold">Vendidas</option>
+          <option value="blocked">De cuentas suspendidas</option></select></div>
+      </div>
+      <div style="overflow-x:auto"><table class="mine">
+        <thead><tr><th></th><th>Publicación</th><th>Vendedor</th><th>Precio</th><th>Cant.</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="lRows"></tbody></table></div>
+      ${listings.length >= 200 ? '<p class="card-meta">Se muestran las 200 publicaciones más recientes.</p>' : ''}`;
+    const paint = () => {
+      const q = document.getElementById('lq').value.trim().toLowerCase();
+      const st = document.getElementById('ls').value;
+      const rows = listings.filter(l => (!q || [l.card_name, l.set_name, l.card_code, l.username, l.display_name].some(v => (v || '').toLowerCase().includes(q)))
+        && (!st || (st === 'blocked' ? l.seller_blocked : l.status === st)));
+      document.getElementById('lRows').innerHTML = rows.map(l => `
+        <tr>
+          <td>${coverImg(l) ? `<img src="${esc(coverImg(l))}" alt="">` : ''}</td>
+          <td><a href="#/carta/${l.id}">${esc(l.card_name)}</a>
+            <div class="card-meta">${isAcc(l) ? esc(ACC_CATEGORIES[l.category]?.label || 'Accesorio') : `<span class="badge ${l.game}">${GAME_LABEL[l.game] || ''}</span> ${esc([l.set_name, l.card_code].filter(Boolean).join(' · '))}`}</div></td>
+          <td><a href="#/vendedor/${encodeURIComponent(l.username || '')}">@${esc(l.username)}</a>${l.seller_blocked ? ' <span class="badge sold">Suspendida</span>' : ''}</td>
+          <td class="price">${money(l.price)}</td>
+          <td>${l.quantity}</td>
+          <td>${l.status === 'sold' ? '<span class="badge sold">Vendida</span>' : '<span class="badge cond">Disponible</span>'}</td>
+          <td class="actions">
+            <a class="btn small" href="#/editar/${l.id}">Editar</a>
+            <button class="btn small" data-toggle="${l.id}">${l.status === 'sold' ? 'Reactivar' : 'Marcar vendida'}</button>
+            <button class="btn small danger" data-del="${l.id}">Borrar</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="7" class="muted">Sin resultados.</td></tr>';
+      labelTables($body);
+    };
+    document.getElementById('lq').addEventListener('input', paint);
+    document.getElementById('ls').addEventListener('change', paint);
+    paint();
+    $body.addEventListener('click', async e => {
+      const b = e.target.closest('button'); if (!b) return;
+      const l = listings.find(x => String(x.id) === (b.dataset.toggle || b.dataset.del));
+      if (!l) return;
+      try {
+        if (b.dataset.del) {
+          if (!confirm(`¿Borrar "${l.card_name}" de @${l.username}? No se puede deshacer.`)) return;
+          await api(`/api/listings/${l.id}`, { method: 'DELETE' });
+          toast('Publicación borrada');
+        } else {
+          await api(`/api/listings/${l.id}/status`, { method: 'PATCH', body: { status: l.status === 'sold' ? 'available' : 'sold' } });
+          toast('Publicación actualizada');
+        }
+        viewAdmin(params);
+      } catch (err) { toast(err.message); }
+    });
+  }
+}
+
 function requireLogin() {
   if (currentUser) return true;
   toast('Inicia sesión para continuar'); go('#/login'); return false;
@@ -1314,6 +1505,7 @@ async function router() {
       case 'perfil': return viewProfile();
       case 'torneos': return parts[1] === 'nuevo' ? viewTournamentForm() : parts[1] === 'importar' ? viewTdfImport() : await viewTournaments();
       case 'torneo': return await viewTournament(parts[1]);
+      case 'admin': return await viewAdmin(params);
       default: $app.innerHTML = '<div class="empty">Página no encontrada. <a href="#/">Ir al catálogo</a></div>';
     }
   } catch (err) {

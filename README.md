@@ -44,6 +44,16 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
 - **Accesorios TCG** (`#/accesorios`): micas, deck boxes, tapetes, carpetas, toploaders, dados y más. Se publican
   como las cartas (fotos, contacto, editar, marcar vendido) con categoría, marca, estado (nuevo, como nuevo, usado)
   y para qué juego (Pokémon, Yu-Gi-Oh! o universal). No se mezclan con el catálogo de cartas.
+- **Administradores** (`#/admin`): pueden editar, marcar como vendida o borrar cualquier publicación (también desde
+  el detalle de la carta), gestionar cualquier torneo, editar los datos de las cuentas, nombrar o quitar
+  administradores, suspender cuentas (no pueden entrar y sus publicaciones dejan de verse) y borrar cuentas con sus
+  publicaciones y fotos (si la cuenta participa en torneos se suspende en lugar de borrarse). Un administrador no
+  puede quitarse el rol ni suspenderse a sí mismo. El **primer administrador** se nombra con un script:
+  ```
+  node scripts/make-admin.mjs <usuario>                       # local (SQLite)
+  STORAGE=aws TABLE_NAME=tcg-market-qa BUCKET_NAME=<bucket> AWS_REGION=us-east-1 node scripts/make-admin.mjs <usuario>   # QA
+  ```
+  Con `--remove` se quita el rol. Después, los administradores nombran a otros desde el panel.
 
 ## Ambiente QA en AWS (serverless)
 
@@ -121,4 +131,6 @@ El dominio se toma de la variable del repo `QA_DOMAIN` (por defecto `tcg.macai.c
 | PATCH | /api/listings/:id/status | Marcar vendida / disponible |
 | GET | /api/users/:username | Perfil público y sus cartas |
 | GET | /api/stats | Totales por juego |
+| GET | /api/admin/overview | (admin) Resumen, cuentas y todas las publicaciones |
+| PUT/DELETE | /api/admin/users/:id | (admin) Editar perfil, rol `is_admin`, suspensión `blocked` / borrar cuenta |
 | GET | /healthz | Salud del servicio |

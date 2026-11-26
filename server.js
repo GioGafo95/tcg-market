@@ -70,10 +70,13 @@ const publicUser = u => u && ({
   location: u.location, contact: u.contact, created_at: u.created_at,
 });
 // Datos que solo ve el propio usuario (incluye su ID de jugador Pokémon)
-const meUser = u => u && ({ ...publicUser(u), pokemon_id: u.pokemon_id || '' });
+const meUser = u => u && ({ ...publicUser(u), pokemon_id: u.pokemon_id || '', is_admin: isAdmin(u) });
+// Lo que ve un administrador de cada cuenta (nunca la contraseña)
+const adminUser = u => u && ({ ...meUser(u), email: u.email, blocked: !!u.blocked });
 
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const sameId = (a, b) => String(a) === String(b);
+const isAdmin = u => u?.role === 'admin';
 
 // Datos de perfil obligatorios: nombre, apellidos, zona y teléfono de contacto
 const NAME_RE = /^\p{L}[\p{L}'. -]*\p{L}\.?$/u;
@@ -115,7 +118,8 @@ app.use(async (req, _res, next) => {
     const token = parseCookies(req.headers.cookie).session;
     if (token && /^[a-f0-9]{64}$/.test(token)) {
       const user = await repo.getSessionUser(token);
-      if (user) { req.user = user; req.sessionToken = token; }
+      // Una cuenta suspendida pierde sus sesiones al instante
+      if (user && !user.blocked) { req.user = user; req.sessionToken = token; }
     }
     next();
   } catch (err) { next(err); }
@@ -134,6 +138,12 @@ app.get('/api/fx', (req, res) => res.json({
 
 function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Debes iniciar sesión.' });
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Debes iniciar sesión.' });
+  if (!isAdmin(req.user)) return res.status(403).json({ error: 'Solo los administradores pueden hacer esto.' });
   next();
 }
 
@@ -167,6 +177,7 @@ app.post('/api/auth/login', async (req, res) => {
   const user = login ? await repo.findUserByLogin(login) : null;
   if (!user || !verifyPassword(password, user.password_hash))
     throw new HttpError(401, 'Usuario o contraseña incorrectos.');
+  if (user.blocked) throw new HttpError(403, 'Tu cuenta está suspendida. Contacta a un administrador.');
   await createSession(res, user.id);
   res.json({ user: meUser(user) });
 });
@@ -288,6 +299,9 @@ async function storePhotos(dataUrls) {
   return decoded.map(({ id, filename }) => ({ id, filename }));
 }
 
+// Las publicaciones de cuentas suspendidas no aparecen en el catálogo público
+const visible = listings => listings.filter(l => !l.seller_blocked);
+
 // Catálogo público: todas las cartas en circulación
 // kind=accessory → accesorios (por defecto, cartas). En accesorios, filtrar por un juego incluye los universales.
 app.get('/api/listings', async (req, res) => {
@@ -302,7 +316,7 @@ app.get('/api/listings', async (req, res) => {
     q: str(req.query.q, 100), seller: str(req.query.seller, 30), sort: str(req.query.sort, 20),
   });
   if (kind === 'accessory' && GAMES.includes(game)) listings = listings.filter(l => l.game === game || l.game === 'any');
-  res.json({ listings: listings.map(l => listingOut(l, req.fx)) });
+  res.json({ listings: visible(listings).map(l => listingOut(l, req.fx)) });
 });
 
 // Expansiones que tienen cartas en venta (para el filtro del catálogo), con cuántas publicaciones hay de cada una
@@ -310,7 +324,7 @@ app.get('/api/listings/sets', async (req, res) => {
   const game = GAMES.includes(req.query.game) ? req.query.game : '';
   const listings = await repo.listListings({ onlyAvailable: true, game, kind: 'card' });
   const counts = new Map();
-  for (const l of listings) {
+  for (const l of visible(listings)) {
     const name = (l.set_name || '').trim();
     if (name) counts.set(name, (counts.get(name) || 0) + 1);
   }
@@ -326,7 +340,8 @@ app.get('/api/listings/mine', requireAuth, async (req, res) => {
 
 app.get('/api/listings/:id', async (req, res) => {
   const l = await repo.getListing(str(req.params.id, 40));
-  if (!l) throw new HttpError(404, 'Carta no encontrada.');
+  // La publicación de una cuenta suspendida solo la ven su dueño (no puede entrar) y los administradores
+  if (!l || (l.seller_blocked && !isAdmin(req.user))) throw new HttpError(404, 'Carta no encontrada.');
   res.json({ listing: listingOut(l, req.fx) });
 });
 
@@ -354,10 +369,11 @@ app.post('/api/listings', requireAuth, async (req, res) => {
   res.status(201).json({ listing: listingOut(listing, req.fx) });
 });
 
+// La publicación debe ser del usuario, salvo que sea administrador (puede editar, marcar y borrar cualquiera)
 async function ownListing(req) {
   const l = await repo.getListing(str(req.params.id, 40));
   if (!l) throw new HttpError(404, 'Carta no encontrada.');
-  if (!sameId(l.user_id, req.user.id)) throw new HttpError(403, 'Esta carta no es tuya.');
+  if (!sameId(l.user_id, req.user.id) && !isAdmin(req.user)) throw new HttpError(403, 'Esta carta no es tuya.');
   return l;
 }
 
@@ -463,7 +479,8 @@ async function loadTdfTournament(t) {
   return { t, tdf: true, players, matches, table };
 }
 
-const isOrganizer = (t, user) => user && sameId(t.organizer_id, user.id);
+// Quien organiza el torneo, o un administrador, puede gestionarlo
+const isOrganizer = (t, user) => !!user && (sameId(t.organizer_id, user.id) || isAdmin(user));
 // Clave del usuario dentro de un torneo: su id en la app, o su ID de jugador si el torneo viene de TOM
 const playerKey = (L, user) => (L.tdf ? user.pokemon_id || null : user.id);
 
@@ -596,7 +613,7 @@ app.post('/api/tournaments/import-tdf', requireAuth, async (req, res) => {
     throw new HttpError(403, 'Tu ID de jugador no aparece en este TDF (ni como organizador ni como jugador).');
 
   const existing = await repo.findTournamentByTdfId(parsed.tdf_id);
-  if (existing && !sameId(existing.organizer_id, req.user.id) && existing.tdf_data?.organizer?.popid !== mine)
+  if (existing && !isOrganizer(existing, req.user) && existing.tdf_data?.organizer?.popid !== mine)
     throw new HttpError(403, `Este torneo ya lo importó @${existing.organizer_username}; solo esa persona o el organizador pueden actualizarlo.`);
   try {
     const t = await repo.saveTdfTournament(req.user.id, parsed, existing?.id);
@@ -672,12 +689,79 @@ app.delete('/api/tournaments/:id', requireAuth, async (req, res) => {
 
 app.get('/api/users/:username', async (req, res) => {
   const user = await repo.findUserByUsername(str(req.params.username, 30));
-  if (!user) throw new HttpError(404, 'Usuario no encontrado.');
+  if (!user || (user.blocked && !isAdmin(req.user))) throw new HttpError(404, 'Usuario no encontrado.');
   const listings = await repo.listListings({ userId: user.id, onlyAvailable: true });
   res.json({ user: publicUser(user), listings: listings.map(l => listingOut(l, req.fx)) });
 });
 
 app.get('/api/stats', async (_req, res) => res.json(await repo.stats()));
+
+// ---------- Administración (solo administradores) ----------
+
+// Resumen, usuarios con sus totales y todas las publicaciones (incluidas vendidas y de cuentas suspendidas)
+app.get('/api/admin/overview', requireAdmin, async (req, res) => {
+  const [users, listings, tournaments] = await Promise.all([
+    repo.listUsers(), repo.listListings({}), repo.listTournaments(),
+  ]);
+  const perUser = new Map();
+  for (const l of listings) {
+    const c = perUser.get(String(l.user_id)) || { available: 0, sold: 0 };
+    c[l.status === 'sold' ? 'sold' : 'available']++;
+    perUser.set(String(l.user_id), c);
+  }
+  res.json({
+    summary: {
+      users: users.length,
+      admins: users.filter(isAdmin).length,
+      blocked: users.filter(u => u.blocked).length,
+      listings_available: listings.filter(l => l.status === 'available').length,
+      listings_sold: listings.filter(l => l.status === 'sold').length,
+      accessories: listings.filter(l => l.kind === 'accessory').length,
+      tournaments: tournaments.length,
+    },
+    users: users.map(u => ({ ...adminUser(u), listings: perUser.get(String(u.id)) || { available: 0, sold: 0 } })),
+    listings: listings.map(l => listingOut(l, req.fx)),
+  });
+});
+
+async function targetUser(req) {
+  const user = await repo.getUser(str(req.params.id, 40));
+  if (!user) throw new HttpError(404, 'Usuario no encontrado.');
+  return user;
+}
+
+// Editar datos de perfil, rol de administrador y suspensión de una cuenta
+app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const user = await targetUser(req);
+  const self = sameId(user.id, req.user.id);
+  const role = req.body.is_admin === undefined ? user.role || '' : req.body.is_admin ? 'admin' : '';
+  const blocked = req.body.blocked === undefined ? !!user.blocked : !!req.body.blocked;
+  if (self && role !== 'admin') throw new HttpError(400, 'No puedes quitarte a ti mismo el rol de administrador.');
+  if (self && blocked) throw new HttpError(400, 'No puedes suspender tu propia cuenta.');
+
+  if (['first_name', 'last_name', 'location', 'contact'].some(k => req.body[k] !== undefined))
+    await repo.updateUser(user.id, validateProfile({ ...user, ...req.body }));
+  const updated = await repo.setUserAdminFlags(user.id, { role, blocked });
+  res.json({ user: adminUser(updated) });
+});
+
+// Borrar una cuenta con todas sus publicaciones y fotos. Si participa en torneos se pide suspenderla en su lugar,
+// para no romper rondas ni resultados de otros jugadores.
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const user = await targetUser(req);
+  if (sameId(user.id, req.user.id)) throw new HttpError(400, 'No puedes borrar tu propia cuenta desde aquí.');
+  const [joined, tournaments] = await Promise.all([repo.listUserTournamentIds(user.id), repo.listTournaments()]);
+  if (joined.length || tournaments.some(t => sameId(t.organizer_id, user.id)))
+    throw new HttpError(409, 'Esta cuenta participa u organiza torneos: suspéndela en lugar de borrarla.');
+
+  const listings = await repo.listListings({ userId: user.id });
+  for (const l of listings) {
+    await repo.deleteListing(l.id);
+    await Promise.all((l.photos || []).map(p => deleteFile(photoKey(p.filename)).catch(() => {})));
+  }
+  await repo.deleteUser(user.id);
+  res.json({ ok: true, deleted_listings: listings.length });
+});
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
 

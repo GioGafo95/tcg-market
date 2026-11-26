@@ -35,6 +35,7 @@ const run = async () => {
     const sets = await call('/api/listings/sets', { expect: 200 }); ok(`expansiones con cartas: ${sets.data.sets.length}`);
     await call('/api/auth/me', { expect: 200 }); ok('sesión (anónima)');
     await call('/api/listings/mine', { expect: 401 }); ok('rutas privadas protegidas');
+    await call('/api/admin/overview', { expect: 401 }); ok('administración protegida');
     const tl = await call('/api/tournaments', { expect: 200 }); ok(`torneos: ${tl.data.tournaments.length}`);
     await call('/api/tournaments/me', { expect: 401 }); ok('panel de torneos protegido');
     console.log('\nTodo OK (solo lectura).');
@@ -61,6 +62,9 @@ const run = async () => {
   await call('/api/auth/register', { method: 'POST', expect: 409,
     body: { username: u, email: `${u}@example.test`, password: 'smoketest123', ...profile } });
   ok('usuario duplicado rechazado');
+  if (ru.is_admin) throw new Error('una cuenta nueva no debe ser administradora');
+  await call('/api/admin/overview', { expect: 403 });
+  ok('panel de administración cerrado para usuarios normales');
 
   // Fotos obligatorias solo si la carta vale más de US$2.50 (aquí, por el precio del vendedor en MXN)
   await call('/api/listings', { method: 'POST', expect: 400, body: { game: 'pokemon', card_name: 'X', price: 500 } });

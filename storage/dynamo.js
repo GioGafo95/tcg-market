@@ -19,7 +19,7 @@ import { randomBytes } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, DeleteCommand,
-  QueryCommand, BatchGetCommand, TransactWriteCommand,
+  QueryCommand, BatchGetCommand, TransactWriteCommand, ScanCommand,
 } from '@aws-sdk/lib-dynamodb';
 
 const TABLE = process.env.TABLE_NAME;
@@ -67,7 +67,8 @@ async function withSellers(listings) {
   const users = await getUsers(listings.map(l => l.user_id));
   return listings.map(l => {
     const u = users.get(l.user_id) || {};
-    return { ...l, username: u.username, display_name: u.display_name, location: u.location, contact: u.contact };
+    return { ...l, username: u.username, display_name: u.display_name, location: u.location, contact: u.contact,
+             seller_blocked: !!u.blocked };
   });
 }
 
@@ -127,6 +128,46 @@ export const repo = {
       ReturnValues: 'ALL_NEW',
     }));
     return strip(out.Attributes);
+  },
+
+  // ---------- Administración de usuarios ----------
+  // Lista completa con Scan (solo la usa el panel de administración; volumen pequeño)
+  async listUsers() {
+    const items = [];
+    let ExclusiveStartKey;
+    do {
+      const out = await ddb.send(new ScanCommand({ TableName: TABLE, FilterExpression: '#t = :u',
+        ExpressionAttributeNames: { '#t': 'type' }, ExpressionAttributeValues: { ':u': 'user' }, ExclusiveStartKey }));
+      items.push(...out.Items);
+      ExclusiveStartKey = out.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+    return items.map(strip).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  },
+
+  async setUserAdminFlags(id, { role, blocked }) {
+    const out = await ddb.send(new UpdateCommand({
+      TableName: TABLE, Key: { PK: `USER#${id}`, SK: 'PROFILE' },
+      UpdateExpression: 'SET #r = :r, blocked = :b', ExpressionAttributeNames: { '#r': 'role' },
+      ExpressionAttributeValues: { ':r': role || '', ':b': !!blocked }, ConditionExpression: 'attribute_exists(PK)',
+      ReturnValues: 'ALL_NEW',
+    }));
+    return strip(out.Attributes);
+  },
+
+  // Borra el perfil y sus claves únicas. Las publicaciones las borra antes el servidor; las sesiones
+  // quedan huérfanas (ya no resuelven a ningún usuario) y caducan solas por TTL.
+  async deleteUser(id) {
+    const user = await this.getUser(id);
+    if (!user) return;
+    const del = Key => ({ Delete: { TableName: TABLE, Key } });
+    await ddb.send(new TransactWriteCommand({ TransactItems: [
+      del({ PK: `USER#${id}`, SK: 'PROFILE' }),
+      del({ PK: `USERNAME#${user.username.toLowerCase()}`, SK: 'UNIQUE' }),
+      del({ PK: `EMAIL#${user.email.toLowerCase()}`, SK: 'UNIQUE' }),
+      ...(user.pokemon_id ? [del({ PK: `POKEID#${user.pokemon_id}`, SK: 'UNIQUE' })] : []),
+      { Update: { TableName: TABLE, Key: { PK: 'META', SK: 'COUNTERS' }, UpdateExpression: 'ADD #u :m',
+                  ExpressionAttributeNames: { '#u': 'users' }, ExpressionAttributeValues: { ':m': -1 } } },
+    ] }));
   },
 
   // ---------- Sesiones ----------
