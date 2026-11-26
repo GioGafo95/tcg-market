@@ -341,7 +341,7 @@ async function viewCatalog(params) {
     <form class="filters" id="filters">
       <input name="q" type="search" placeholder="Buscar por nombre, expansión o código…" value="${esc(q)}">
       <select name="set" aria-label="Expansión">
-        <option value="">Todas las expansiones</option>
+        <option value="">Expansiones</option>
         ${sets.map(s => `<option value="${esc(s.name)}" ${set.toLowerCase() === s.name.toLowerCase() ? 'selected' : ''}>${esc(s.name)} (${s.count})</option>`).join('')}
       </select>
       <select name="sort">
@@ -447,7 +447,7 @@ async function viewListing(id) {
         </div>
         ${gallery.length > 1 ? `<div class="thumbs">${gallery.map((g, i) => `
           <button type="button" class="thumb ${i === 0 ? 'active' : ''}" data-i="${i}" title="${esc(g.label)}">
-            <img src="${esc(g.url)}" alt=""><span>${g.real ? '📷' : 'Oficial'}</span>
+            <img src="${esc(g.url)}" alt="" loading="lazy"><span>${g.real ? '📷' : 'Oficial'}</span>
           </button>`).join('')}</div>` : ''}
         ${l.photos.length ? `<p class="card-meta">📷 ${l.photos.length} foto(s) real(es) subidas por el vendedor.</p>`
           : acc ? '<p class="card-meta">El vendedor no subió fotos (son opcionales en accesorios de bajo valor); pídeselas si las necesitas.</p>'
@@ -765,7 +765,7 @@ async function viewMine(params = new URLSearchParams()) {
           <thead><tr><th></th><th>Publicación</th><th>Juego</th><th>Estado</th><th>Precio</th><th>Cant.</th><th>Venta</th><th></th></tr></thead>
           <tbody>${listings.map(l => `
             <tr>
-              <td>${coverImg(l) ? `<img src="${esc(coverImg(l))}" alt="">` : ''}</td>
+              <td>${coverImg(l) ? `<img src="${esc(coverImg(l))}" alt="" loading="lazy">` : ''}</td>
               <td><a href="#/carta/${l.id}">${esc(l.card_name)}</a><div class="card-meta">${isAcc(l) ? `${ACC_CATEGORIES[l.category]?.icon || ''} ${esc(ACC_CATEGORIES[l.category]?.label || 'Accesorio')}${l.set_name ? ' · ' + esc(l.set_name) : ''}` : esc([l.set_name, l.card_code].filter(Boolean).join(' · '))}</div></td>
               <td><span class="badge ${l.game}">${GAME_LABEL[l.game] || ''}</span></td>
               <td>${esc(condLabel(l))}</td>
@@ -1504,6 +1504,17 @@ async function viewTournament(id) {
     return m.result === 'tie' ? 'Empate' : m.result === 'dl' ? 'Doble derrota' : `Gana ${esc((m.result === 'p1' ? m.player1 : m.player2)?.display_name)}`;
   };
 
+  const standingsHTML = t.status === 'registration' ? '' : `
+      <h2>${t.status === 'finished' ? '🏆 Clasificación final' : 'Clasificación'}</h2>
+      <div class="panel" style="overflow-x:auto">
+        ${isTdf ? '<p class="card-meta">Lugar oficial calculado por TOM. Récord con top cut incluido; puntos y % de rivales solo del suizo.</p>' : ''}
+        ${!isTdf ? `<p class="card-meta">${d.rules.game === 'yugioh' ? 'Desempate KTS: puntos · % de victorias de rivales (OMW) · % de los rivales de rivales (OOMW) · suma de cuadrados de rondas perdidas. Número KTS = AABBBCCCDDD.' : 'Desempates Play! Pokémon: puntos · % de victorias de rivales (mín. 25 %) · % de rivales de rivales · enfrentamiento directo.'}${d.tournament.phase === 'top' || d.rounds.some(r => r.topcut) ? ' Los primeros lugares salen del top cut.' : ''}</p>` : ''}
+        <table class="mine"><thead><tr><th>#</th><th>Jugador</th>${multiCat ? '<th>Categoría</th>' : ''}<th>Récord</th><th>Puntos</th><th>${d.rules?.game === 'yugioh' ? 'OMW' : '% rivales'}</th>${!isTdf ? `<th>${d.rules?.game === 'yugioh' ? 'OOMW' : '% riv. de riv.'}</th>` : ''}${d.rules?.game === 'yugioh' ? '<th>KTS</th>' : ''}</tr></thead>
+        <tbody>${d.standings.map(s => `<tr class="${isMe(s) ? 'mine-row' : ''}${s.dropped ? ' dropped' : ''}">
+          <td>${s.place}${s.place === 1 && t.status === 'finished' ? ' 👑' : ''}</td><td>${nameOf(s)}${s.dropped ? ` <span class="badge cond">Retirado R${s.dropped}</span>` : ''}</td>${multiCat ? `<td>${esc(s.category)}</td>` : ''}
+          <td>${record(s)}</td><td><b>${s.points}</b></td><td>${s.opp_win_pct}%</td>${!isTdf ? `<td>${s.oopp_win_pct ?? '—'}%</td>` : ''}${d.rules?.game === 'yugioh' ? `<td class="mono">${esc(s.kts || '')}</td>` : ''}</tr>`).join('')}</tbody></table>
+      </div>`;
+
   $app.innerHTML = `
     ${compNav('locales')}
     <p><a href="#/torneos">← Torneos</a></p>
@@ -1566,6 +1577,8 @@ async function viewTournament(id) {
 
     ${d.can_manage && !isTdf ? organizerPanel(d) : ''}
 
+    ${t.status === 'finished' ? standingsHTML : ''}
+
     ${d.rounds.length ? [...d.rounds].reverse().map(r => `
       <div class="round-head"><h2>${esc(r.label || `Ronda ${r.round}`)}${multiCat ? ` · ${esc(r.category)}` : ''}${r.round === lastRound[r.category || ''] && t.status === 'running' ? ' <span class="badge t-running">en curso</span>' : ''}</h2>
         ${!isTdf && d.can_manage && !(r.round === t.current_round && t.status === 'running')
@@ -1577,16 +1590,7 @@ async function viewTournament(id) {
           <td>${m.bye ? '<span class="muted">— bye —</span>' : nameOf(m.player2)}</td><td>${resultCell(m, r.round)}</td></tr>`).join('')}</tbody></table>
       </div>`).join('') : ''}
 
-    ${t.status !== 'registration' ? `
-      <h2>Clasificación</h2>
-      <div class="panel" style="overflow-x:auto">
-        ${isTdf ? '<p class="card-meta">Lugar oficial calculado por TOM. Récord con top cut incluido; puntos y % de rivales solo del suizo.</p>' : ''}
-        ${!isTdf ? `<p class="card-meta">${d.rules.game === 'yugioh' ? 'Desempate KTS: puntos · % de victorias de rivales (OMW) · % de los rivales de rivales (OOMW) · suma de cuadrados de rondas perdidas. Número KTS = AABBBCCCDDD.' : 'Desempates Play! Pokémon: puntos · % de victorias de rivales (mín. 25 %) · % de rivales de rivales · enfrentamiento directo.'}${d.tournament.phase === 'top' || d.rounds.some(r => r.topcut) ? ' Los primeros lugares salen del top cut.' : ''}</p>` : ''}
-        <table class="mine"><thead><tr><th>#</th><th>Jugador</th>${multiCat ? '<th>Categoría</th>' : ''}<th>Récord</th><th>Puntos</th><th>${d.rules?.game === 'yugioh' ? 'OMW' : '% rivales'}</th>${!isTdf ? `<th>${d.rules?.game === 'yugioh' ? 'OOMW' : '% riv. de riv.'}</th>` : ''}${d.rules?.game === 'yugioh' ? '<th>KTS</th>' : ''}</tr></thead>
-        <tbody>${d.standings.map(s => `<tr class="${isMe(s) ? 'mine-row' : ''}${s.dropped ? ' dropped' : ''}">
-          <td>${s.place}${s.place === 1 && t.status === 'finished' ? ' 👑' : ''}</td><td>${nameOf(s)}${s.dropped ? ` <span class="badge cond">Retirado R${s.dropped}</span>` : ''}</td>${multiCat ? `<td>${esc(s.category)}</td>` : ''}
-          <td>${record(s)}</td><td><b>${s.points}</b></td><td>${s.opp_win_pct}%</td>${!isTdf ? `<td>${s.oopp_win_pct ?? '—'}%</td>` : ''}${d.rules?.game === 'yugioh' ? `<td class="mono">${esc(s.kts || '')}</td>` : ''}</tr>`).join('')}</tbody></table>
-      </div>` : ''}
+    ${t.status !== 'finished' ? standingsHTML : ''}
 
     <h2>${isTdf ? 'Jugadores' : 'Jugadores inscritos'} (${d.players.length})</h2>
     ${isTdf ? '<p class="muted">Los jugadores con cuenta en la app aparecen con su usuario; los demás, con nombre e inicial del apellido.</p>' : ''}
@@ -2493,12 +2497,12 @@ async function viewCompEvents(kind) {
       <article class="panel event-card">
         <div class="event-head">
           <div><h2>${ev.country ? `<span class="flag-chip">${esc(ev.country)}</span> ` : ''}${esc(ev.name)}</h2>
-            <span class="card-meta">${fmtShort(ev.date)} · ${Number(ev.players).toLocaleString('es-MX')} jugadores</span></div>
-          ${ev.url ? `<a class="btn small" href="${esc(ev.url)}" target="_blank" rel="noopener">Ver en Limitless ↗</a>` : ''}
+            <span class="card-meta">📅 ${fmtShort(ev.date)} · 👥 ${Number(ev.players).toLocaleString('es-MX')} jugadores</span></div>
         </div>
         <ol class="top8">${ev.top.map(s => `
           <li class="${s.placing === 1 ? 'champ' : ''}"><span class="place">${s.placing === 1 ? '🏆' : s.placing}</span>${deckIcons(s.deck, sprites)}
             <span class="one-line"><b>${esc(s.deck.name)}</b><small>${esc(s.name)}${s.record ? ` · ${s.record.wins}-${s.record.losses}-${s.record.ties}` : ''}</small></span></li>`).join('')}</ol>
+        ${ev.url ? `<a class="event-link" href="${esc(ev.url)}" target="_blank" rel="noopener">Ver resultados en Limitless <b>↗</b></a>` : ''}
       </article>`).join('') || '<div class="empty">Sin torneos por ahora.</div>'}</div>
     <p class="card-meta source-note">Fuente: <a href="https://limitlesstcg.com" target="_blank" rel="noopener">Limitless TCG</a>.</p>`;
 }
@@ -2610,8 +2614,8 @@ async function viewYgoEvents() {
     
     <div class="event-list">${(T.list || []).map(ev => `
       <article class="panel event-card">
-        <div class="event-head"><div><h2>${esc(ev.name)}</h2><span class="card-meta">${ev.players ? `${ev.players} jugadores` : ''}</span></div></div>
-        <ol class="top8">${ev.top.map(s => `<li class="${s.place_n === 1 ? 'champ' : ''}"><span class="place">${s.place_n === 1 ? '🏆' : esc(String(s.placing).replace('Top ', 'T'))}</span>${ygoFace(s.cover, img, s.archetype)}
+        <div class="event-head"><div><h2>${esc(ev.name)}</h2><span class="card-meta">${ev.players ? `👥 ${ev.players} jugadores` : ''}</span></div></div>
+        <ol class="top8">${ev.top.map(s => `<li class="${s.place_n === 1 ? 'champ' : ''}"><span class="place">${s.place_n === 1 ? '🏆' : /runner/i.test(s.placing) ? '2' : esc(String(s.placing).replace('Top ', 'T'))}</span>${ygoFace(s.cover, img, s.archetype)}
           <span class="one-line"><b>${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.archetype)}</a>` : esc(s.archetype)}</b><small>${esc(s.name || '')}</small></span></li>`).join('')}</ol>
       </article>`).join('') || '<div class="empty small">Sin listas por ahora.</div>'}</div>
     <p class="card-meta source-note">Fuente: <a href="https://ygoprodeck.com" target="_blank" rel="noopener">YGOPRODeck</a> (Tournament Meta Decks).</p>`;
@@ -3159,7 +3163,7 @@ async function viewAdmin(params) {
         && (!st || (st === 'blocked' ? l.seller_blocked : l.status === st)));
       document.getElementById('lRows').innerHTML = rows.map(l => `
         <tr>
-          <td>${coverImg(l) ? `<img src="${esc(coverImg(l))}" alt="">` : ''}</td>
+          <td>${coverImg(l) ? `<img src="${esc(coverImg(l))}" alt="" loading="lazy">` : ''}</td>
           <td><a href="#/carta/${l.id}">${esc(l.card_name)}</a>
             <div class="card-meta">${isAcc(l) ? esc(ACC_CATEGORIES[l.category]?.label || 'Accesorio') : `<span class="badge ${l.game}">${GAME_LABEL[l.game] || ''}</span> ${esc([l.set_name, l.card_code].filter(Boolean).join(' · '))}`}</div></td>
           <td><a href="#/vendedor/${encodeURIComponent(l.username || '')}">@${esc(l.username)}</a>${l.seller_blocked ? ' <span class="badge sold">Suspendida</span>' : ''}</td>

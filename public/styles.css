@@ -1443,7 +1443,7 @@ main { z-index: 1; }
 .stat-tiles + .two-cols { margin-top: 0; }
 .top8 .deck-icons, .movers .deck-icons, .deck-cell .deck-icons, .pred-card .deck-icons { min-width: 60px; justify-content: center; }
 .top8 .deck-ico.fallback, .movers .deck-ico.fallback, .deck-cell .deck-ico.fallback, .pred-card .deck-ico.fallback { margin: 0 auto; }
-.stat-tile b.tile-deck { overflow-wrap: anywhere; }
+.stat-tile b.tile-deck { overflow-wrap: break-word; hyphens: auto; }
 @media (max-width: 600px) { .stat-tile b.tile-deck { font-size: .92rem; } }
 
 /* ---------- Competitivo: selector de juego, Yu-Gi-Oh! y cartas más usadas ---------- */
@@ -1599,3 +1599,19 @@ body.clock-mode .topbar, body.clock-mode .tabbar, body.clock-mode .match-banner 
 .tu-icon { font-size: 3rem; }
 .tu-rule { color: var(--ink-soft); font-size: .92rem; }
 .tu-card .btn { margin-top: .8rem; }
+
+/* ---------- Tarjetas de torneos: nombres largos y enlace a la fuente ---------- */
+.event-card { display: flex; flex-direction: column; }
+.event-card .top8 { flex: 1; align-content: start; }
+.top8 .one-line b, .top8 .one-line small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top8 .one-line b a { color: inherit; }
+.event-link {
+  display: flex; align-items: center; justify-content: center; gap: .4rem; margin-top: .9rem; white-space: nowrap;
+  padding: .6rem .85rem; border-radius: 12px; background: #f4edff; border: 1px solid #e6dafc;
+  color: var(--ink) !important; font-size: .85rem; font-weight: 700; text-decoration: none;
+  transition: background .15s, border-color .15s, transform .15s;
+}
+.event-link span { color: var(--ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-link b { color: #7c3aed; white-space: nowrap; }
+.event-link:hover { background: #ebe0ff; border-color: #cdb6f7; transform: translateY(-1px); }
+.event-link:focus-visible { outline: 3px solid var(--violet); outline-offset: 2px; }

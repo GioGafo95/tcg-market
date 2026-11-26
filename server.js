@@ -1,5 +1,6 @@
 import express from 'express';
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { repo, STORAGE, putFile, deleteFile, publicUrl, uploadsHandler } from './storage/index.js';
 import { searchCards, getCardByRef, cacheRefImage } from './cards.js';
 import { getUsdMxn, toMxn } from './fx.js';
@@ -33,7 +34,41 @@ class HttpError extends Error {
 app.disable('x-powered-by');
 // Las fotos llegan como data URLs dentro del JSON (el navegador las comprime antes de enviarlas)
 app.use(express.json({ limit: '5mb' }));
-app.use(express.static('public'));
+// ---------- Archivos del front con caché ----------
+// Cada despliegue tiene una versión (hash del contenido de public/). index.html carga los JS y el CSS desde
+// /v/<versión>/…, así que el navegador y CloudFront los guardan un año sin preguntar; al cambiar algo cambia la
+// ruta y se descarga lo nuevo. index.html nunca se guarda (no-cache, con ETag) para que siempre apunte a lo último.
+function assetVersion(dir) {
+  const h = createHash('sha1');
+  const walk = (d) => {
+    for (const f of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = `${d}/${f.name}`;
+      if (f.isDirectory()) walk(p);
+      else { h.update(p); h.update(readFileSync(p)); }
+    }
+  };
+  walk(dir);
+  return h.digest('hex').slice(0, 12);
+}
+const ASSET_V = assetVersion('public');
+// Los módulos se piden todos a la vez (modulepreload) en lugar de descubrirlos uno por uno
+const FRONT_MODULES = readdirSync('public').filter(f => f.endsWith('.js') && f !== 'app.js');
+const INDEX_HTML = readFileSync('public/index.html', 'utf8')
+  .replace('href="/styles.css"', `href="/v/${ASSET_V}/styles.css"`)
+  .replace('<script type="module" src="/app.js"></script>',
+    [...FRONT_MODULES.map(m => `<link rel="modulepreload" href="/v/${ASSET_V}/${m}">`),
+     `<script type="module" src="/v/${ASSET_V}/app.js"></script>`].join('\n  '));
+app.get(['/', '/index.html'], (_req, res) => { res.set('Cache-Control', 'no-cache'); res.type('html').send(INDEX_HTML); });
+// En local (SQLite) no se guarda nada: así los cambios a public/ se ven al recargar sin reiniciar
+const staticForever = STORAGE === 'aws' ? express.static('public', { index: false, maxAge: '365d', immutable: true })
+  : express.static('public', { index: false, setHeaders: res => res.setHeader('Cache-Control', 'no-cache') });
+const staticShort = express.static('public', { index: false, maxAge: '5m' });
+// Una versión vieja (pestaña abierta durante un despliegue) recibe lo actual, pero sin guardarlo para siempre
+app.use('/v/:ver', (req, res, next) => (req.params.ver === ASSET_V ? staticForever : staticShort)(req, res, next));
+// Imágenes del sitio: un día; JS/CSS pedidos sin versión: siempre se revalidan
+app.use(express.static('public', { index: false, setHeaders: (res, path) => {
+  res.setHeader('Cache-Control', /\.(png|webp|jpe?g|svg|ico|woff2?)$/.test(path) ? 'public, max-age=86400' : 'no-cache');
+} }));
 app.use('/uploads', uploadsHandler(express));
 
 app.get('/healthz', (_req, res) => res.json({ ok: true, storage: STORAGE }));
