@@ -191,7 +191,7 @@ app.get('/api/lookup', requireAuth, async (req, res) => {
   if (!game) throw new HttpError(400, 'Juego no válido.');
   try {
     const page = Math.min(Math.max(parseInt(req.query.page, 10) || 1, 1), 50);
-    const source = ['pokemontcg', 'tcgdex', 'tcgdex-es'].includes(req.query.source) ? req.query.source : '';
+    const source = ['pokemontcg', 'tcgdex', 'tcgdex-es', 'tcgdex-set'].includes(req.query.source) ? req.query.source : '';
     const { results, has_more, source: used = '' } = await searchCards(game, str(req.query.q, 100), page, source);
     res.json({
       results: results.map(r => ({ ...r, market_price_mxn: toMxn(r.market_price, req.fx) })),

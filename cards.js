@@ -1,5 +1,5 @@
 // Consulta de bases de datos públicas de cartas y precios de mercado.
-//  - Pokémon:   api.pokemontcg.io  (precio "market" de TCGplayer, USD); si falla, api.tcgdex.net
+//  - Pokémon:   api.tcgdex.net (precio "market" de TCGplayer, USD; nombres en español); si falla, api.pokemontcg.io
 //  - Yu-Gi-Oh!: db.ygoprodeck.com  (precio de TCGplayer por edición/set, USD)
 // Collectr no ofrece una API pública, por eso se usa TCGplayer como referencia de mercado.
 import { createHash } from 'node:crypto';
@@ -63,7 +63,7 @@ const mapPokemon = c => ({
   market_source: 'TCGplayer',
 });
 
-// Respaldo para Pokémon: api.tcgdex.net (también trae precios de TCGplayer). Sus ids llevan el prefijo "tcgdex:".
+// TCGdex (fuente principal de Pokémon; también trae precios de TCGplayer). Sus ids llevan el prefijo "tcgdex:".
 const TCGDEX = 'https://api.tcgdex.net/v2/en';
 
 function tcgdexPrice(c) {
@@ -90,56 +90,90 @@ const mapTcgdex = c => ({
 // Cartas solo digitales de Pokémon TCG Pocket: no existen físicamente, se excluyen
 const isPocket = c => /\/tcgp\//.test(c.image || '') || /^(A\d|B\d|P-[AB]-)/.test(c.id);
 
-// Búsqueda en TCGdex. lang 'es' permite buscar por el nombre en español; el detalle (set y precio)
-// siempre se lee de la base en inglés, con el mismo id, y se conserva el nombre en español.
-async function searchTcgdex({ name, number }, page, lang = 'en') {
-  const params = new URLSearchParams({ 'pagination:page': page, 'pagination:itemsPerPage': PAGE });
+// Expansiones de TCGdex con su fecha de salida (GraphQL, una sola consulta; caché de 6 h).
+// La API de cartas no ordena por fecha, así que el orden "más nuevas primero" se calcula aquí.
+let setsCache = { t: 0, data: null };
+async function tcgdexSets() {
+  if (setsCache.data && Date.now() - setsCache.t < 6 * 3600e3) return setsCache.data;
+  const res = await fetch('https://api.tcgdex.net/v2/graphql', {
+    method: 'POST', signal: AbortSignal.timeout(10000),
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ query: '{ sets { id name releaseDate } }' }),
+  });
+  if (!res.ok) throw new Error(`Error ${res.status} al consultar las expansiones de TCGdex`);
+  const sets = (await res.json()).data?.sets || [];
+  const data = new Map(sets.map(s => [s.id, { name: s.name, date: s.releaseDate || '' }]));
+  setsCache = { t: Date.now(), data };
+  return data;
+}
+// El id de carta es "<set>-<número>" (el set puede llevar guiones: "tk-hs-r-2")
+const setIdOf = cardId => cardId.slice(0, cardId.lastIndexOf('-'));
+
+// Búsqueda principal de Pokémon en TCGdex. Trae todas las coincidencias (solo id, nombre e imagen), las ordena de
+// la expansión más nueva a la más vieja y pide el detalle (expansión, rareza, precio) solo de la página pedida.
+// lang 'es' busca por el nombre en español; el detalle se lee en inglés con el mismo id y se conserva el nombre.
+// setWords: "Charizard Obsidian Flames" → nombre "Charizard" dentro de expansiones cuyo nombre contenga "Obsidian Flames".
+async function searchTcgdex({ name, number, setWords = '' }, page, lang = 'en') {
+  const params = new URLSearchParams();
   if (name) params.set('name', name);
   if (number) params.set('localId', number);
-  const raw = await getJSON(`https://api.tcgdex.net/v2/${lang}/cards?${params}`);
-  const list = Array.isArray(raw) ? raw : [];
-  const items = list.filter(c => !isPocket(c) && (!number || parseInt(c.localId, 10) === Number(number)));
+  const [raw, sets] = await Promise.all([
+    getJSON(`https://api.tcgdex.net/v2/${lang}/cards?${params}`),
+    tcgdexSets().catch(() => new Map()),   // sin fechas: se conserva el orden de la API
+  ]);
+  const wanted = setWords.toLowerCase();
+  const all = (Array.isArray(raw) ? raw : [])
+    .filter(c => !isPocket(c) && (!number || parseInt(c.localId, 10) === Number(number)))
+    .filter(c => !wanted || (sets.get(setIdOf(c.id))?.name || '').toLowerCase().includes(wanted))
+    .map((c, i) => ({ c, i, date: sets.get(setIdOf(c.id))?.date || '' }))
+    .sort((a, b) => b.date.localeCompare(a.date) || a.i - b.i)
+    .map(x => x.c);
+  const items = all.slice((page - 1) * PAGE, page * PAGE);
   const cards = await Promise.all(items.map(async it => {
     const c = await getJSON(`${TCGDEX}/cards/${encodeURIComponent(it.id)}`).catch(() => null);
-    const card = c?.id ? mapTcgdex(c) : mapTcgdex({ ...it, image: it.image?.replace('/es/', '/en/') });
+    const card = c?.id ? mapTcgdex(c)
+      : mapTcgdex({ ...it, image: it.image?.replace('/es/', '/en/'), set: { name: sets.get(setIdOf(it.id))?.name } });
     return lang === 'en' ? card : { ...card, card_name: it.name };
   }));
-  return { results: cards, has_more: list.length === PAGE, source: lang === 'en' ? 'tcgdex' : 'tcgdex-es' };
+  return { results: cards, has_more: all.length > page * PAGE, total: all.length, source: lang === 'en' ? 'tcgdex' : 'tcgdex-es' };
 }
 
-// source: la fuente que dio la página 1 ('pokemontcg' | 'tcgdex' | 'tcgdex-es'). Las páginas siguientes
-// la respetan para que no se mezclen ni se repitan cartas entre fuentes.
-async function searchPokemon(query, page, source = '') {
-  const { name, number } = parseQuery(query);
-  const run = async (parts, retries = 1) => {
+// Respaldo: pokemontcg.io (ya ordena por fecha). Se usa si TCGdex no responde.
+async function searchPokemontcg({ name, number }, page, retries = 1) {
+  const clean = s => s.replace(/["*\\]/g, '');
+  const words = clean(name).split(' ');
+  const run = async parts => {
     const q = encodeURIComponent(parts.filter(Boolean).join(' '));
     const out = await getJSON(`https://api.pokemontcg.io/v2/cards?q=${q}&page=${page}&pageSize=${PAGE}` +
       `&orderBy=-set.releaseDate&select=${PKM_FIELDS}`, { retries });
     return { results: (out.data || []).map(mapPokemon), has_more: page * PAGE < (out.totalCount || 0), source: 'pokemontcg' };
   };
-  const clean = s => s.replace(/["*\\]/g, '');
-  const words = clean(name).split(' ');
-  const byName = retries => run([name && `name:"${clean(name)}*"`, number && `number:${number}`], retries);
-  // "Charizard Obsidian Flames": la primera palabra es el nombre y el resto la expansión
-  const bySet = retries => run([`name:"${words[0]}*"`, `set.name:"${words.slice(1).join(' ')}*"`, number && `number:${number}`], retries);
+  const r = await run([name && `name:"${clean(name)}*"`, number && `number:${number}`]);
+  if (r.results.length || words.length < 2) return r;
+  return run([`name:"${words[0]}*"`, `set.name:"${words.slice(1).join(' ')}*"`, number && `number:${number}`]);
+}
+
+// source: la fuente que dio la página 1 ('tcgdex' | 'tcgdex-es' | 'tcgdex-set' | 'pokemontcg'). Las páginas
+// siguientes la respetan para que no se mezclen ni se repitan cartas entre fuentes.
+async function searchPokemon(query, page, source = '') {
+  const { name, number } = parseQuery(query);
+  const words = name.split(' ').filter(Boolean);
+  const bySet = () => searchTcgdex({ name: words[0], number, setWords: words.slice(1).join(' ') }, page);
 
   if (source === 'tcgdex') return searchTcgdex({ name, number }, page);
   if (source === 'tcgdex-es') return searchTcgdex({ name, number }, page, 'es');
-  if (source === 'pokemontcg') {
-    const r = await byName(3);
-    return r.results.length || words.length < 2 ? r : bySet(3);
-  }
+  if (source === 'tcgdex-set') return { ...(await bySet()), source: 'tcgdex-set' };
+  if (source === 'pokemontcg') return searchPokemontcg({ name, number }, page, 3);
   try {
-    let r = await byName(1);
-    if (!r.results.length && words.length > 1) r = await bySet(1);
-    if (r.results.length) return r;
+    const en = await searchTcgdex({ name, number }, page);
+    if (en.results.length || page > 1) return en;
+    const es = await searchTcgdex({ name, number }, page, 'es');           // nombre en español
+    if (es.results.length || words.length < 2) return es;
+    return { ...(await bySet()), source: 'tcgdex-set' };                    // "Charizard Obsidian Flames"
   } catch (err) {
-    console.warn('pokemontcg.io no disponible, usando TCGdex:', err.message);
+    console.warn('TCGdex no disponible, usando pokemontcg.io:', err.message);
+    return searchPokemontcg({ name, number }, page);
   }
-  // Respaldo (o sin resultados): TCGdex en inglés y, si tampoco hay, por nombre en español
-  const en = await searchTcgdex({ name, number }, page);
-  if (en.results.length || page > 1) return en;
-  return searchTcgdex({ name, number }, page, 'es');
 }
 
 // ---------- Yu-Gi-Oh! ----------

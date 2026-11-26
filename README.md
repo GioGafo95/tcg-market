@@ -37,7 +37,9 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
   historial de cada jugador con su ID vinculado. Subido a mitad del evento, cada jugador ve su rival y mesa de la ronda.
   No se guardan fechas de nacimiento; los jugadores sin cuenta se muestran con nombre e inicial del apellido.
 - **Buscador de cartas**: páginas con "Ver más", búsqueda por número ("Pikachu 25"), expansión, código de
-  Yu-Gi-Oh! ("LOB-EN001") y nombre de Pokémon en español; reintenta y usa TCGdex si pokemontcg.io falla.
+  Yu-Gi-Oh! ("LOB-EN001") y nombre de Pokémon en español. Pokémon se busca en **TCGdex** (más completo y estable;
+  resultados de la expansión más nueva a la más vieja usando las fechas de su API GraphQL); si TCGdex falla, se usa
+  pokemontcg.io.
 - Perfil público de cada vendedor con su contacto y sus cartas.
 - **Accesorios TCG** (`#/accesorios`): micas, deck boxes, tapetes, carpetas, toploaders, dados y más. Se publican
   como las cartas (fotos, contacto, editar, marcar vendido) con categoría, marca, estado (nuevo, como nuevo, usado)
