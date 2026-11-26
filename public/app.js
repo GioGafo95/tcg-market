@@ -357,7 +357,8 @@ async function viewListing(id) {
       <div>
         <div class="gallery-main">
           ${first ? `<img id="mainImg" src="${esc(first.url)}" alt="${esc(l.card_name)}">` : `<span class="placeholder">${acc ? cat?.icon || '✨' : '✦'}</span>`}
-          ${first ? `<span class="gallery-label ${first.real ? 'real' : ''}" id="mainLabel">${esc(first.label)}</span>` : ''}
+          ${first ? `<span class="gallery-label ${first.real ? 'real' : ''}" id="mainLabel">${esc(first.label)}</span>
+                     <span class="zoom-hint" aria-hidden="true">🔍 Ampliar</span>` : ''}
         </div>
         ${gallery.length > 1 ? `<div class="thumbs">${gallery.map((g, i) => `
           <button type="button" class="thumb ${i === 0 ? 'active' : ''}" data-i="${i}" title="${esc(g.label)}">
@@ -412,13 +413,20 @@ async function viewListing(id) {
       </div>
     </div>`;
 
-  $app.querySelectorAll('.thumb').forEach(b => b.addEventListener('click', () => {
-    const g = gallery[b.dataset.i];
+  let current = 0;
+  const show = (i) => {
+    current = i;
+    const g = gallery[i];
     document.getElementById('mainImg').src = g.url;
     const label = document.getElementById('mainLabel');
     label.textContent = g.label; label.classList.toggle('real', g.real);
-    $app.querySelectorAll('.thumb').forEach(x => x.classList.toggle('active', x === b));
-  }));
+    $app.querySelectorAll('.thumb').forEach(x => x.classList.toggle('active', Number(x.dataset.i) === i));
+  };
+  $app.querySelectorAll('.thumb').forEach(b => b.addEventListener('click', () => show(Number(b.dataset.i))));
+  // Tocar la foto la abre a pantalla completa (con zoom); al cerrar, la galería queda en la última foto vista
+  document.querySelector('.gallery-main')?.addEventListener('click', () => {
+    if (gallery.length) openLightbox(gallery, current, show);
+  });
   document.getElementById('admToggle')?.addEventListener('click', async () => {
     await api(`/api/listings/${l.id}/status`, { method: 'PATCH', body: { status: l.status === 'sold' ? 'available' : 'sold' } });
     toast('Publicación actualizada'); viewListing(l.id);
@@ -428,6 +436,140 @@ async function viewListing(id) {
     await api(`/api/listings/${l.id}`, { method: 'DELETE' });
     toast('Publicación borrada'); go('#/admin?tab=listings');
   });
+}
+
+// ---------- Visor de fotos a pantalla completa ----------
+// items: [{ url, label, real }]. Tocar/clic = acercar ahí (o alejar); arrastrar = mover la foto ampliada;
+// rueda del ratón o pellizco = zoom; deslizar o flechas = foto anterior/siguiente; Esc, ✕ o fondo = cerrar.
+function openLightbox(items, startIndex = 0, onChange = () => {}) {
+  let i = startIndex, scale = 1, tx = 0, ty = 0;
+  const MAX = 4;
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.innerHTML = `
+    <div class="lb-stage"><img class="lb-img" alt="" draggable="false"></div>
+    <button type="button" class="lb-btn lb-close" aria-label="Cerrar">✕</button>
+    ${items.length > 1 ? `<button type="button" class="lb-btn lb-prev" aria-label="Foto anterior">‹</button>
+                          <button type="button" class="lb-btn lb-next" aria-label="Foto siguiente">›</button>` : ''}
+    <div class="lb-caption"><span class="lb-label"></span><span class="lb-count"></span>
+      <span class="lb-tip">Toca para acercar · arrastra para mover</span></div>`;
+  document.body.appendChild(box);
+  document.body.classList.add('lb-open');
+  const img = box.querySelector('.lb-img'), stage = box.querySelector('.lb-stage');
+
+  const apply = (animate = true) => {
+    img.style.transition = animate ? 'transform .25s ease' : 'none';
+    img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    box.classList.toggle('zoomed', scale > 1);
+  };
+  // Evita que la foto ampliada se salga de la pantalla al moverla
+  const clamp = () => {
+    const w = img.offsetWidth * scale, h = img.offsetHeight * scale;
+    const mx = Math.max(0, (w - stage.clientWidth) / 2), my = Math.max(0, (h - stage.clientHeight) / 2);
+    tx = Math.min(mx, Math.max(-mx, tx)); ty = Math.min(my, Math.max(-my, ty));
+  };
+  // Zoom manteniendo fijo el punto (cx, cy) de la pantalla
+  const zoomAt = (next, cx, cy, animate = true) => {
+    next = Math.min(MAX, Math.max(1, next));
+    const r = stage.getBoundingClientRect();
+    const px = cx - (r.left + r.width / 2), py = cy - (r.top + r.height / 2);
+    tx = px - (px - tx) * (next / scale); ty = py - (py - ty) * (next / scale);
+    scale = next;
+    if (scale === 1) { tx = 0; ty = 0; }
+    clamp(); apply(animate);
+  };
+  const go = (n) => {
+    if (items.length < 2) return;
+    i = (n + items.length) % items.length;
+    scale = 1; tx = 0; ty = 0;
+    render(); onChange(i);
+  };
+  const render = () => {
+    const it = items[i];
+    img.src = it.url; img.alt = it.label;
+    box.querySelector('.lb-label').textContent = it.label;
+    box.querySelector('.lb-label').classList.toggle('real', !!it.real);
+    box.querySelector('.lb-count').textContent = items.length > 1 ? `${i + 1} / ${items.length}` : '';
+    apply(false);
+  };
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('hashchange', close);
+    document.body.classList.remove('lb-open');
+    box.remove();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowLeft') go(i - 1);
+    else if (e.key === 'ArrowRight') go(i + 1);
+  };
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('hashchange', close);
+  box.querySelector('.lb-close').addEventListener('click', close);
+  box.querySelector('.lb-prev')?.addEventListener('click', () => go(i - 1));
+  box.querySelector('.lb-next')?.addEventListener('click', () => go(i + 1));
+
+  // Gestos con punteros (ratón, dedo o lápiz): toque, arrastre, deslizar y pellizco
+  const pts = new Map();
+  let start = null, pinch = null, moved = false;
+  stage.addEventListener('pointerdown', (e) => {
+    try { stage.setPointerCapture(e.pointerId); } catch { /* sin captura el gesto sigue funcionando */ }
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    moved = false;
+    if (pts.size === 1) start = { x: e.clientX, y: e.clientY, tx, ty, t: Date.now() };
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), scale };
+    }
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      moved = true;
+      zoomAt(pinch.scale * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, (a.x + b.x) / 2, (a.y + b.y) / 2, false);
+      return;
+    }
+    if (!start) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (Math.hypot(dx, dy) > 6) moved = true;
+    if (scale > 1) { tx = start.tx + dx; ty = start.ty + dy; clamp(); apply(false); }
+  });
+  const end = (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (pts.size > 0 || !start) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    const s = start; start = null;
+    if (e.type === 'pointercancel') return;
+    if (!moved) {
+      // Toque sin moverse: sobre la foto acerca/aleja; fuera de la foto (sin zoom) cierra
+      // (con la captura del puntero el evento llega al escenario, así que se mira si el punto cae sobre la foto)
+      // (se calcula con el zoom actual, no con getBoundingClientRect, que durante la animación aún da el tamaño anterior)
+      const sr = stage.getBoundingClientRect();
+      const halfW = img.offsetWidth * scale / 2, halfH = img.offsetHeight * scale / 2;
+      const cx = sr.left + sr.width / 2 + tx, cy = sr.top + sr.height / 2 + ty;
+      const onImg = Math.abs(e.clientX - cx) <= halfW && Math.abs(e.clientY - cy) <= halfH;
+      if (onImg) zoomAt(scale > 1 ? 1 : 2.5, e.clientX, e.clientY);
+      else if (scale > 1) zoomAt(1, e.clientX, e.clientY);
+      else close();
+    } else if (scale === 1 && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) && Date.now() - s.t < 600) {
+      go(dx < 0 ? i + 1 : i - 1);   // deslizar sin zoom: cambiar de foto
+    }
+  };
+  stage.addEventListener('pointerup', end);
+  stage.addEventListener('pointercancel', end);
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoomAt(scale * (e.deltaY < 0 ? 1.25 : 0.8), e.clientX, e.clientY, false);
+  }, { passive: false });
+
+  render();
+  box.querySelector('.lb-close').focus();
 }
 
 async function viewSeller(username) {
