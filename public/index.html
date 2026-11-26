@@ -15,13 +15,11 @@
 <body>
   <header class="topbar">
     <a href="#/" class="brand" aria-label="Macai TCG · inicio"><img class="brand-logo" src="/img/logo-macai.webp" alt="Macai TCG" width="720" height="572"></a>
-    <button class="nav-toggle" id="navToggle" type="button" aria-label="Abrir menú" aria-expanded="false" aria-controls="nav">
-      <span></span><span></span><span></span>
-    </button>
-    <nav id="nav"></nav>
+    <nav id="nav" aria-label="Principal"></nav>
   </header>
   <div id="matchBanner" class="match-banner" hidden></div>
   <main id="app" aria-live="polite"></main>
+  <nav id="tabbar" class="tabbar" aria-label="Secciones"></nav>
   <div id="toast" class="toast" hidden></div>
   <script type="module" src="/app.js"></script>
 </body>

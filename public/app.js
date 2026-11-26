@@ -28,16 +28,7 @@ let currentUser = null;
 
 // ---------- Celular: menú desplegable, tablas como tarjetas y altura de la barra ----------
 const $topbar = document.querySelector('.topbar');
-const $navToggle = document.getElementById('navToggle');
-function setMenu(open) {
-  $topbar.classList.toggle('nav-open', open);
-  $navToggle.setAttribute('aria-expanded', String(open));
-  $navToggle.setAttribute('aria-label', open ? 'Cerrar menú' : 'Abrir menú');
-}
-$navToggle.addEventListener('click', () => setMenu(!$topbar.classList.contains('nav-open')));
-$nav.addEventListener('click', e => { if (e.target.closest('a, button')) setMenu(false); });
-document.addEventListener('click', e => { if (!$topbar.contains(e.target)) setMenu(false); });
-window.addEventListener('hashchange', () => setMenu(false));
+
 
 // El aviso de partida se pega justo debajo de la barra, mida lo que mida
 const syncTopbar = () => document.documentElement.style.setProperty('--topbar-h', `${$topbar.offsetHeight}px`);
@@ -159,26 +150,97 @@ const formData = (form) => Object.fromEntries(new FormData(form).entries());
 
 // ---------- Navegación ----------
 
+// Secciones principales: en computadora van en la barra superior; en celular, en la barra inferior
+const SECTIONS_NAV = [
+  { key: '', href: '#/', icon: '🃏', label: 'Cartas' },
+  { key: 'accesorios', href: '#/accesorios', icon: '🎒', label: 'Accesorios' },
+  { key: 'decks', href: '#/decks', icon: '📚', label: 'Decks' },
+  { key: 'torneos', href: '#/torneos', icon: '⚔️', label: 'Torneos' },
+];
+const initials = (u) => {
+  const [a = '', b = ''] = (u.first_name ? [u.first_name, u.last_name || ''] : String(u.display_name || u.username || '?').split(' '));
+  return ((a[0] || '?') + (b[0] || '')).toUpperCase();
+};
+const sellMenu = (cls = '') => `
+  <div class="menu ${cls}">
+    <button type="button" class="btn primary small" data-menu aria-haspopup="true" aria-expanded="false">＋ Vender</button>
+    <div class="menu-pop" role="menu">
+      <a role="menuitem" href="#/vender"><span>🃏</span><div><b>Una carta</b><small>Pokémon o Yu-Gi-Oh!</small></div></a>
+      <a role="menuitem" href="#/vender-accesorio"><span>🎒</span><div><b>Un accesorio</b><small>Micas, deck box, tapetes…</small></div></a>
+    </div>
+  </div>`;
+
 function renderNav() {
-  $nav.innerHTML = currentUser
-    ? `<a class="btn small" href="#/accesorios">🎒 Accesorios</a>
-       <a class="btn small" href="#/torneos">⚔ Torneos</a>
-       <a class="btn primary small" href="#/vender">+ Vender carta</a>
-       <a class="btn small" href="#/decks">🃏 Mis decks</a>
-       <a class="btn small" href="#/mis-cartas">Mis publicaciones</a>
-       <a class="btn small" href="#/perfil">Mi perfil</a>
-       ${currentUser.is_admin ? '<a class="btn small admin-link" href="#/admin">🛡 Admin</a>' : ''}
-       <span class="nav-user">@${esc(currentUser.username)}</span>
-       <button class="btn small" id="logout">Salir</button>`
-    : `<a class="btn small" href="#/accesorios">🎒 Accesorios</a>
-       <a class="btn small" href="#/torneos">⚔ Torneos</a>
-       <a class="btn small" href="#/login">Iniciar sesión</a>
-       <a class="btn primary small" href="#/registro">Crear cuenta</a>`;
+  const u = currentUser;
+  const links = SECTIONS_NAV.map(s => `<a class="nav-link" data-sec="${s.key}" href="${s.href}">${s.label}</a>`).join('');
+  $nav.innerHTML = `
+    <div class="nav-links">${links}</div>
+    <div class="nav-right">
+      ${u ? `${sellMenu('only-desktop')}
+        <div class="menu">
+          <button type="button" class="account-btn" data-menu aria-haspopup="true" aria-expanded="false" aria-label="Mi cuenta">
+            <span class="avatar">${esc(initials(u))}</span><span class="account-name">${esc(u.first_name || u.username)}</span><span class="caret">▾</span>
+          </button>
+          <div class="menu-pop right" role="menu">
+            <div class="menu-head"><b>${esc(u.display_name)}</b><small>@${esc(u.username)}</small></div>
+            <a role="menuitem" href="#/mis-cartas"><span>🏷️</span><div><b>Mis publicaciones</b></div></a>
+            <a role="menuitem" href="#/decks"><span>📚</span><div><b>Mis decks</b></div></a>
+            <a role="menuitem" href="#/torneos"><span>⚔️</span><div><b>Mis torneos</b></div></a>
+            <a role="menuitem" href="#/perfil"><span>👤</span><div><b>Mi perfil</b></div></a>
+            ${u.is_admin ? '<a role="menuitem" href="#/admin"><span>🛡️</span><div><b>Administración</b></div></a>' : ''}
+            <button type="button" role="menuitem" id="logout"><span>🚪</span><div><b>Cerrar sesión</b></div></button>
+          </div>
+        </div>`
+      : `<a class="btn small ghost" href="#/login">Entrar</a><a class="btn primary small" href="#/registro">Crear cuenta</a>`}
+    </div>`;
+
+  // Barra inferior (celular): secciones + botón central para vender
+  const tab = (s) => `<a class="tab-item" data-sec="${s.key}" href="${s.href}"><span class="ti-icon">${s.icon}</span><span>${s.label}</span></a>`;
+  document.getElementById('tabbar').innerHTML = `
+    ${tab(SECTIONS_NAV[0])}${tab(SECTIONS_NAV[1])}
+    <div class="menu up tab-sell">
+      <button type="button" class="sell-fab" data-menu aria-haspopup="true" aria-expanded="false" aria-label="Vender"><span>＋</span></button>
+      <div class="menu-pop" role="menu">
+        <a role="menuitem" href="#/vender"><span>🃏</span><div><b>Vender una carta</b></div></a>
+        <a role="menuitem" href="#/vender-accesorio"><span>🎒</span><div><b>Vender un accesorio</b></div></a>
+      </div>
+    </div>
+    ${tab(SECTIONS_NAV[2])}${tab(SECTIONS_NAV[3])}`;
+
   document.getElementById('logout')?.addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
     currentUser = null; renderNav(); refreshMatchBanner(); toast('Sesión cerrada'); go('#/');
   });
+  markActiveNav();
 }
+
+// Resalta la sección actual en las dos barras
+function markActiveNav() {
+  const first = location.hash.slice(2).split(/[/?]/)[0];
+  const sec = ['carta', 'vendedor'].includes(first) ? '' : ['torneo'].includes(first) ? 'torneos' : first;
+  document.querySelectorAll('[data-sec]').forEach(a => a.classList.toggle('active', a.dataset.sec === sec));
+}
+
+// Menús desplegables (Vender, Mi cuenta): se abren con clic y se cierran al elegir, al tocar fuera o con Esc
+function closeMenus(except) {
+  document.querySelectorAll('.menu.open').forEach(m => {
+    if (m === except) return;
+    m.classList.remove('open'); m.querySelector('[data-menu]')?.setAttribute('aria-expanded', 'false');
+  });
+}
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-menu]');
+  if (btn) {
+    const menu = btn.closest('.menu');
+    const open = !menu.classList.contains('open');
+    closeMenus(menu);
+    menu.classList.toggle('open', open); btn.setAttribute('aria-expanded', String(open));
+    return;
+  }
+  if (e.target.closest('.menu-pop a, .menu-pop button') || !e.target.closest('.menu')) closeMenus();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenus(); });
+window.addEventListener('hashchange', () => { closeMenus(); markActiveNav(); });
 
 function cardTile(l, { showSeller = true } = {}) {
   const img = coverImg(l);
@@ -190,15 +252,16 @@ function cardTile(l, { showSeller = true } = {}) {
                                   : `<span class="placeholder">${acc ? cat?.icon || '✨' : '✦'}</span>`}
         ${l.photo_count ? `<span class="photo-badge" title="Fotos reales del vendedor">📷 ${l.photo_count}</span>` : ''}</div>
       <div class="card-body">
-        <div>${acc ? `<span class="badge acc-cat">${esc(cat?.label || 'Accesorio')}</span>` : ''}
-             <span class="badge ${l.game}">${GAME_LABEL[l.game] || ''}</span>
+        <div class="tile-badges">${acc ? `<span class="badge acc-cat">${esc(cat?.label || 'Accesorio')}</span>` : `<span class="badge ${l.game}">${GAME_LABEL[l.game] || ''}</span>`}
              <span class="badge cond" title="${esc(acc ? condLabel(l) : CONDITIONS[l.condition])}">${esc(acc ? condLabel(l) : l.condition)}</span></div>
-        <div class="card-name">${esc(l.card_name)}</div>
-        <div class="card-meta">${esc((acc ? [l.set_name] : [l.set_name, l.card_code, l.rarity]).filter(Boolean).join(' · '))}</div>
-        ${showSeller ? `<div class="card-meta">Vende @${esc(l.username)}${l.location ? ' · ' + esc(l.location) : ''}</div>` : ''}
-        ${l.market_price_mxn ? `<div class="card-meta">Mercado: ${money(l.market_price_mxn)}</div>` : ''}
-        <div class="card-foot"><span class="price">${money(l.price)}</span>
-          <span class="card-meta">x${l.quantity}</span></div>
+        <div class="card-name" title="${esc(l.card_name)}">${esc(l.card_name)}</div>
+        <div class="card-meta one-line">${esc((acc ? [l.set_name || ACC_GAMES[l.game]] : [l.set_name, l.card_code]).filter(Boolean).join(' · ')) || '&nbsp;'}</div>
+        <div class="card-foot">
+          <span class="price">${money(l.price)}</span>
+          ${l.quantity > 1 ? `<span class="qty-pill" title="Disponibles">×${l.quantity}</span>` : ''}
+        </div>
+        <div class="tile-market">${l.market_price_mxn ? marketCompare(l.price, l.market_price_mxn) : ""}</div>
+        ${showSeller ? `<div class="tile-seller one-line">@${esc(l.username)}${l.location ? ' · 📍 ' + esc(l.location) : ''}</div>` : ''}
       </div>
     </a>`;
 }
@@ -227,18 +290,29 @@ async function viewCatalog(params) {
     ? `<a class="floater f${i}" href="#/carta/${showcase[i].id}"><img src="${esc(coverImg(showcase[i]))}" alt="${esc(showcase[i].card_name)}"></a>`
     : `<div class="floater f${i} back"><span>✦</span></div>`).join('');
 
+  // Con sesión iniciada la portada es más baja y muestra accesos rápidos; sin sesión, la portada completa
+  const u = currentUser;
   $app.innerHTML = `
-    <section class="scene">
+    <section class="scene ${u ? 'compact' : ''}">
       ${sceneSVG()}
       <div class="scene-content">
         <div class="hero-copy">
+          ${u ? `
+          <span class="kicker">✦ Hola, ${esc(u.first_name || u.username)} ✦</span>
+          <h1>¿Qué carta buscas <span class="grad">hoy?</span></h1>
+          <div class="quick-actions">
+            <a class="qa" href="#/vender"><span>🃏</span>Vender carta</a>
+            <a class="qa" href="#/decks/nuevo"><span>📚</span>Armar deck</a>
+            <a class="qa" href="#/mis-cartas"><span>🏷️</span>Mis ventas</a>
+            <a class="qa" href="#/torneos"><span>⚔️</span>Torneos</a>
+          </div>` : `
           <span class="kicker">✦ Pokémon · Yu-Gi-Oh! ✦</span>
           <h1>Cada carta tiene una historia.<br><span class="grad">Encuentra la tuya.</span></h1>
           <p>El mercado donde los coleccionistas del reino intercambian sus tesoros. Fotos reales, precios de referencia y vendedores de tu zona.</p>
           <div class="hero-cta">
             <a class="btn primary big" href="#catalogo" id="exploreBtn">Explorar cartas</a>
-            <a class="btn ghost big" href="${currentUser ? '#/vender' : '#/registro'}">${currentUser ? 'Vender una carta' : 'Crear cuenta gratis'}</a>
-          </div>
+            <a class="btn ghost big" href="#/registro">Crear cuenta gratis</a>
+          </div>`}
           <div class="stats">
             <div class="stat"><b>${pk}</b><span>cartas Pokémon</span></div>
             <div class="stat"><b>${yg}</b><span>cartas Yu-Gi-Oh!</span></div>
@@ -252,9 +326,11 @@ async function viewCatalog(params) {
       <h2>Cartas en circulación</h2>
       <span class="muted">${listings.length} ${listings.length === 1 ? 'resultado' : 'resultados'}</span>
     </div>
+    <div class="catalog-bar">
     <div class="tabs">
       ${[['', 'Todas'], ['pokemon', 'Pokémon'], ['yugioh', 'Yu-Gi-Oh!']].map(([v, t]) =>
         `<button class="tab ${game === v ? 'active' : ''}" data-game="${v}">${t}</button>`).join('')}
+      <a class="tab tab-link" href="#/accesorios">🎒 Accesorios</a>
     </div>
     <form class="filters" id="filters">
       <input name="q" type="search" placeholder="Buscar por nombre, expansión o código…" value="${esc(q)}">
@@ -267,6 +343,7 @@ async function viewCatalog(params) {
           .map(([v, t]) => `<option value="${v}" ${sort === v ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
     </form>
+    </div>
     ${listings.length
       ? `<div class="grid">${listings.map(l => cardTile(l)).join('')}</div>`
       : `<div class="empty">No hay cartas que coincidan.${currentUser ? ' <a href="#/vender">¡Publica la primera!</a>'
@@ -279,12 +356,12 @@ async function viewCatalog(params) {
     go(`#/?${next}`);
   };
   // Al cambiar de juego se quita la expansión (las de Pokémon no existen en Yu-Gi-Oh! y viceversa)
-  $app.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => update({ game: b.dataset.game, set: '' })));
+  $app.querySelectorAll('.tab[data-game]').forEach(b => b.addEventListener('click', () => update({ game: b.dataset.game, set: '' })));
   const form = document.getElementById('filters');
   form.addEventListener('submit', e => { e.preventDefault(); update({}); });
   form.querySelectorAll('select').forEach(s => s.addEventListener('change', () => update({})));
   form.q.addEventListener('search', () => update({})); // al pulsar la X de limpiar
-  document.getElementById('exploreBtn').addEventListener('click', e => {
+  document.getElementById('exploreBtn')?.addEventListener('click', e => {
     e.preventDefault(); document.getElementById('catalogo').scrollIntoView({ behavior: 'smooth' });
   });
 }
@@ -402,6 +479,11 @@ async function viewListing(id) {
           ${l.location ? `<div class="muted">📍 ${esc(l.location)}</div>` : ''}
           ${l.contact ? `<div>Contacto: ${esc(l.contact)}</div>${contactButtons(l.contact, l.card_name)}` : '<div class="muted">El vendedor no ha dejado un contacto.</div>'}
         </div>
+        ${!mine && l.status !== 'sold' && contactButtons(l.contact || '', l.card_name) ? `
+          <div class="buy-bar">
+            <div><span class="price">${money(l.price)}</span><small>${esc(l.display_name || '@' + l.username)}</small></div>
+            ${contactButtons(l.contact, l.card_name).replace('<div class="contact-btns">', '<div class="contact-btns compact">')}
+          </div>` : ''}
         ${mine ? `<p style="margin-top:1rem"><a class="btn" href="#/editar/${l.id}">Editar mi publicación</a></p>`
           : currentUser?.is_admin ? `
           <div class="admin-note" style="margin-top:1rem">🛡 Administración
@@ -657,18 +739,24 @@ function bindAuthForm(endpoint, okMsg) {
   });
 }
 
-async function viewMine() {
+async function viewMine(params = new URLSearchParams()) {
   if (!requireLogin()) return;
-  const { listings } = await api('/api/listings/mine');
+  const { listings: all } = await api('/api/listings/mine');
+  // Filtro por estado de venta (pestañas con conteo)
+  const show = ['available', 'sold'].includes(params.get('estado')) ? params.get('estado') : '';
+  const listings = show ? all.filter(l => l.status === show) : all;
+  const nAvail = all.filter(l => l.status !== 'sold').length, nSold = all.length - nAvail;
+  const stTab = (v, t, n) => `<a class="tab ${show === v ? 'active' : ''}" href="#/mis-cartas${v ? '?estado=' + v : ''}">${t} <span class="tab-n">${n}</span></a>`;
   $app.innerHTML = `
-    <div class="hero">
+    <div class="page-head">
       <div><h1>Mis publicaciones</h1><p class="muted">Administra las cartas y accesorios que tienes a la venta.</p></div>
       <div class="t-actions"><a class="btn" href="#/vender-accesorio">+ Vender accesorio</a><a class="btn primary" href="#/vender">+ Vender carta</a></div>
     </div>
+    ${all.length ? `<div class="tabs status-tabs">${stTab('', 'Todas', all.length)}${stTab('available', 'Disponibles', nAvail)}${stTab('sold', 'Vendidas', nSold)}</div>` : ''}
     ${listings.length ? `
       <div class="panel" style="overflow-x:auto">
         <table class="mine">
-          <thead><tr><th></th><th>Publicación</th><th>Juego</th><th>Estado</th><th>Precio</th><th>Cant.</th><th>Publicación</th><th></th></tr></thead>
+          <thead><tr><th></th><th>Publicación</th><th>Juego</th><th>Estado</th><th>Precio</th><th>Cant.</th><th>Venta</th><th></th></tr></thead>
           <tbody>${listings.map(l => `
             <tr>
               <td>${coverImg(l) ? `<img src="${esc(coverImg(l))}" alt="">` : ''}</td>
@@ -686,22 +774,22 @@ async function viewMine() {
             </tr>`).join('')}
           </tbody>
         </table>
-      </div>` : `<div class="empty">Aún no tienes publicaciones. <a href="#/vender">Vende una carta</a> o <a href="#/vender-accesorio">un accesorio</a>.</div>`}`;
+      </div>` : all.length ? `<div class="empty small">No hay publicaciones en esta pestaña.</div>` : `<div class="empty">Aún no tienes publicaciones. <a href="#/vender">Vende una carta</a> o <a href="#/vender-accesorio">un accesorio</a>.</div>`}`;
 
   $app.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     if (!confirm('¿Borrar esta publicación? No se puede deshacer.')) return;
     await api(`/api/listings/${b.dataset.del}`, { method: 'DELETE' });
-    toast('Publicación borrada'); viewMine();
+    toast('Publicación borrada'); viewMine(new URLSearchParams(location.hash.split('?')[1] || ''));
   }));
   $app.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', async () => {
     const l = listings.find(x => String(x.id) === b.dataset.toggle);
     await api(`/api/listings/${l.id}/status`, { method: 'PATCH', body: { status: l.status === 'sold' ? 'available' : 'sold' } });
-    toast('Publicación actualizada'); viewMine();
+    toast('Publicación actualizada'); viewMine(new URLSearchParams(location.hash.split('?')[1] || ''));
   }));
 }
 
 // Selector de fotos reales (formularios de cartas y de accesorios): pinta #photoGrid y usa #photoInput
-function setupPhotos(initial = []) {
+function setupPhotos(initial = [], onChange = () => {}) {
   const keep = initial.map(p => ({ ...p }));
   const added = []; // data URLs comprimidas en el navegador
   const input = document.getElementById('photoInput');
@@ -714,6 +802,7 @@ function setupPhotos(initial = []) {
     document.getElementById('addPhoto')?.addEventListener('click', () => input.click());
     document.querySelectorAll('[data-keep]').forEach(b => b.addEventListener('click', () => { keep.splice(b.dataset.keep, 1); render(); }));
     document.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', () => { added.splice(b.dataset.new, 1); render(); }));
+    onChange();
   }
   input.addEventListener('change', async () => {
     const files = [...input.files].slice(0, MAX_PHOTOS - keep.length - added.length);
@@ -725,7 +814,8 @@ function setupPhotos(initial = []) {
     render();
   });
   render();
-  return { count: () => keep.length + added.length, added: () => added, keepIds: () => keep.map(p => p.id) };
+  return { count: () => keep.length + added.length, added: () => added, keepIds: () => keep.map(p => p.id),
+           first: () => keep[0]?.url || added[0] || '' };
 }
 
 // Formulario de accesorio: nombre, categoría, marca, para qué juego, estado, precio y fotos
@@ -831,7 +921,7 @@ async function viewListingForm(id, kind = 'card') {
   if ((id ? l.kind : kind) === 'accessory') renderAccessoryForm(l, id, fxInfo);
   else renderCardForm(l, id, fxInfo);
   // Un administrador editando la publicación de otra persona: aviso arriba del formulario
-  if (othersListing) $app.querySelector('.form-wide')?.insertAdjacentHTML('afterbegin',
+  if (othersListing) $app.querySelector('.sell-main, .form-wide')?.insertAdjacentHTML('afterbegin',
     `<div class="admin-note">🛡 Estás editando como administrador la publicación de <b>@${esc(l.username)}</b>. Los cambios se guardan a su nombre. <a href="#/admin?tab=listings">Volver al panel</a></div>`);
 }
 
@@ -844,68 +934,108 @@ function renderCardForm(l, id, fxInfo) {
   // ref.market_price está en MXN (convertido en el servidor); ref.usd es el valor original de TCGplayer
   let ref = l.ref_id ? { ref_id: l.ref_id, image: l.image_url, market_price: l.market_price_mxn, usd: l.market_price_usd,
                          market_source: l.market_source, fx: l.fx } : null;
+  // Diseño: pasos en tarjetas a la izquierda y, a la derecha (fija al bajar), la vista previa con el botón de publicar
   $app.innerHTML = `
     <p><a href="#/mis-cartas">← Mis publicaciones</a></p>
-    <div class="panel form-wide">
+    <div class="page-head"><div>
       <h1>${id ? 'Editar carta' : 'Vender una carta'}</h1>
-      <form id="f" novalidate>
-        <div class="tabs" id="gameTabs">
-          ${['pokemon', 'yugioh'].map(g => `<button type="button" class="tab ${l.game === g ? 'active' : ''}" data-game="${g}">${GAME_LABEL[g]}</button>`).join('')}
-        </div>
-        <input type="hidden" name="game" value="${esc(l.game)}">
-
-        <h2 class="step">1. ¿Qué carta vendes?</h2>
-        <div class="field">
-          <label>Nombre de la carta</label>
-          <div style="display:flex; gap:.5rem">
-            <input name="card_name" required maxlength="120" value="${esc(l.card_name)}" placeholder="ej. Charizard ex / Dark Magician" autocomplete="off">
-            <button type="button" class="btn" id="lookup">Buscar</button>
+      <p class="muted">Elige tu carta, sube fotos y pon tu precio. Te sugerimos el precio de mercado.</p>
+    </div></div>
+    <form id="f" class="sell-layout" novalidate>
+      <div class="sell-main">
+        <section class="panel step-card">
+          <div class="step-title"><span class="step-num">1</span><div><h2>¿Qué carta vendes?</h2>
+            <p class="card-meta">Busca y elige tu edición exacta: llenamos los datos, la imagen oficial y el precio de mercado.</p></div></div>
+          <div class="tabs" id="gameTabs">
+            ${['pokemon', 'yugioh'].map(g => `<button type="button" class="tab ${l.game === g ? 'active' : ''}" data-game="${g}">${GAME_LABEL[g]}</button>`).join('')}
           </div>
-          <div class="card-meta" style="margin-top:.3rem">Escribe y elige tu carta exacta (edición y rareza): rellenamos los datos, la imagen oficial y el precio estimado de mercado. Puedes afinar con el número (ej. "Pikachu 25", "Charizard ex 199/165") o el código de edición de Yu-Gi-Oh! (ej. "LOB-EN001").</div>
+          <input type="hidden" name="game" value="${esc(l.game)}">
+          <div class="search-row">
+            <input name="card_name" required maxlength="120" value="${esc(l.card_name)}" placeholder="ej. Charizard ex 199 · Dark Magician · LOB-EN001" autocomplete="off" aria-label="Nombre de la carta">
+            <button type="button" class="btn primary" id="lookup">Buscar</button>
+          </div>
+          <p class="card-meta hint">Tip: agrega el número ("Pikachu 25") o el código de edición de Yu-Gi-Oh! para encontrarla más rápido.</p>
           <div class="lookup-results" id="results"></div>
-        </div>
-        <div id="refBox"></div>
+          <div id="refBox"></div>
+          <details class="manual" id="manual" ${!l.ref_id && (l.set_name || l.card_code) ? 'open' : ''}>
+            <summary>Datos de la carta <span class="card-meta">(se llenan solos al elegirla · edítalos si hace falta)</span></summary>
+            <div class="row">
+              <div class="field"><label>Expansión / set</label><input name="set_name" maxlength="120" value="${esc(l.set_name)}"></div>
+              <div class="field"><label>Código / número</label><input name="card_code" maxlength="40" value="${esc(l.card_code)}" placeholder="ej. 199/165 · LOB-005"></div>
+              <div class="field"><label>Rareza</label><input name="rarity" maxlength="60" value="${esc(l.rarity)}"></div>
+            </div>
+          </details>
+        </section>
 
-        <div class="row">
-          <div class="field"><label>Expansión / set</label><input name="set_name" maxlength="120" value="${esc(l.set_name)}"></div>
-          <div class="field"><label>Código / número</label><input name="card_code" maxlength="40" value="${esc(l.card_code)}" placeholder="ej. 199/165 · LOB-005"></div>
-          <div class="field"><label>Rareza</label><input name="rarity" maxlength="60" value="${esc(l.rarity)}"></div>
-        </div>
+        <section class="panel step-card">
+          <div class="step-title"><span class="step-num">2</span><div><h2>Fotos reales <span class="req" id="photoReq"></span></h2>
+            <p class="card-meta">Hasta ${MAX_PHOTOS} fotos de <b>tu</b> carta (frente y reverso, con buena luz). <span id="photoRule"></span></p></div></div>
+          <div class="photo-grid" id="photoGrid"></div>
+          <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp" multiple hidden>
+        </section>
 
-        <h2 class="step">2. Fotos reales de tu carta <span class="req" id="photoReq"></span></h2>
-        <p class="card-meta" style="margin-top:-.4rem">Sube hasta ${MAX_PHOTOS} fotos de <b>tu</b> carta (frente y reverso, con buena luz). Los compradores las verán al abrir la publicación.
-          <span id="photoRule"></span></p>
-        <div class="photo-grid" id="photoGrid"></div>
-        <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp" multiple hidden>
+        <section class="panel step-card">
+          <div class="step-title"><span class="step-num">3</span><div><h2>Estado y precio</h2>
+            <p class="card-meta">Sé honesto con el estado: evita malos entendidos con el comprador.</p></div></div>
+          <div class="field"><label>Estado</label>
+            <div class="cond-picker" id="condPicker">
+              ${Object.entries(CONDITIONS).map(([k, v]) => `<label class="cond-opt"><input type="radio" name="condition" value="${k}" ${l.condition === k ? 'checked' : ''}><span><b>${k}</b><small>${v}</small></span></label>`).join('')}
+            </div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Precio (MXN)</label>
+              <div class="price-input"><span>$</span><input name="price" type="number" inputmode="decimal" min="0" step="0.01" required value="${esc(l.price)}" placeholder="0"></div>
+              <div class="card-meta" id="priceHint"></div></div>
+            <div class="field"><label>Cantidad</label><input name="quantity" type="number" inputmode="numeric" min="0" max="999" step="1" required value="${esc(l.quantity)}"></div>
+            <div class="field"><label>Idioma</label><select name="language">
+              ${LANGUAGES.map(x => `<option ${l.language === x ? 'selected' : ''}>${x}</option>`).join('')}
+            </select></div>
+          </div>
+          <div class="field"><label>Notas para el comprador <span class="card-meta">(opcional)</span></label><textarea name="notes" rows="3" maxlength="1000" placeholder="Detalles, envío, intercambios…">${esc(l.notes)}</textarea></div>
+        </section>
+      </div>
 
-        <h2 class="step">3. Estado y precio</h2>
-        <div class="row">
-          <div class="field"><label>Estado</label><select name="condition">
-            ${Object.entries(CONDITIONS).map(([k, v]) => `<option value="${k}" ${l.condition === k ? 'selected' : ''}>${k} — ${v}</option>`).join('')}
-          </select></div>
-          <div class="field"><label>Idioma</label><select name="language">
-            ${LANGUAGES.map(x => `<option ${l.language === x ? 'selected' : ''}>${x}</option>`).join('')}
-          </select></div>
-          <div class="field"><label>Precio (MXN)</label><input name="price" type="number" inputmode="decimal" min="0" step="0.01" required value="${esc(l.price)}">
-            <div class="card-meta" id="priceHint"></div></div>
-          <div class="field"><label>Cantidad</label><input name="quantity" type="number" inputmode="numeric" min="0" max="999" step="1" required value="${esc(l.quantity)}"></div>
-        </div>
-        <div class="field"><label>Notas para el comprador</label><textarea name="notes" rows="3" maxlength="1000" placeholder="Detalles, envío, intercambios…">${esc(l.notes)}</textarea></div>
-        <div class="error" id="err"></div>
-        <div class="actions">
-          <button class="btn primary" id="submitBtn">${id ? 'Guardar cambios' : 'Publicar carta'}</button>
+      <aside class="sell-side">
+        <div class="panel preview-panel">
+          <div class="card-meta preview-label">Así se verá tu publicación</div>
+          <div id="preview"></div>
+          <ul class="checklist" id="checklist"></ul>
+          <div class="error" id="err"></div>
+          <button class="btn primary big" id="submitBtn">${id ? 'Guardar cambios' : 'Publicar carta'}</button>
           <a class="btn" href="#/mis-cartas">Cancelar</a>
         </div>
-      </form>
-    </div>`;
+      </aside>
+    </form>`;
 
   const f = document.getElementById('f');
   const box = document.getElementById('results');
+  let photos = null;
+
+  // Vista previa en vivo (misma tarjeta del catálogo) y lista de lo que falta
+  function renderPreview() {
+    const price = Number(f.price.value) || 0;
+    const fake = {
+      id: 'preview', kind: 'card', game: f.game.value, card_name: f.card_name.value.trim() || 'Nombre de la carta',
+      set_name: f.set_name.value, card_code: f.card_code.value, condition: f.condition.value || 'NM',
+      price, quantity: Number(f.quantity.value) || 1, photo_count: photos?.count() || 0,
+      image_url: photos?.first() ? '' : ref?.image || '', cover_photo: photos?.first() || '',
+      market_price_mxn: ref?.market_price || null, username: currentUser.username, location: currentUser.location,
+    };
+    document.getElementById('preview').innerHTML = cardTile(fake).replace('<a ', '<div ').replace(/<\/a>\s*$/, '</div>');
+    const items = [
+      [!!ref, ref ? 'Carta elegida con su imagen oficial' : 'Elige tu carta en el buscador'],
+      [!photosNeeded() || photos?.count() > 0, photos?.count() ? `${photos.count()} foto(s) real(es)` : photosNeeded() ? 'Falta al menos una foto' : 'Fotos opcionales'],
+      [price > 0, price > 0 ? `Precio: ${money(price)}` : 'Pon tu precio'],
+    ];
+    document.getElementById('checklist').innerHTML = items.map(([ok, t]) => `<li class="${ok ? 'ok' : ''}">${ok ? '✔' : '○'} ${esc(t)}</li>`).join('');
+  }
+  f.addEventListener('input', () => renderPreview());
+  f.addEventListener('change', () => renderPreview());
 
   // --- Carta de referencia y precio estimado ---
   function renderRef() {
     const el = document.getElementById('refBox');
-    if (!ref) { el.innerHTML = ''; renderPriceHint(); return; }
+    if (!ref) { el.innerHTML = ''; renderPriceHint(); renderPreview(); return; }
     el.innerHTML = `
       <div class="ref-box">
         ${safeImg(ref.image) ? `<img src="${esc(ref.image)}" alt="">` : ''}
@@ -925,7 +1055,7 @@ function renderCardForm(l, id, fxInfo) {
       </div>`;
     document.getElementById('usePrice')?.addEventListener('click', () => { f.price.value = Math.round(ref.market_price); renderPriceHint(); });
     document.getElementById('clearRef').addEventListener('click', () => { ref = null; renderRef(); });
-    renderPriceHint();
+    renderPriceHint(); renderPreview();
   }
   function renderPriceHint() {
     const hint = document.getElementById('priceHint');
@@ -934,6 +1064,7 @@ function renderCardForm(l, id, fxInfo) {
       ? `Mercado: ${money(ref.market_price)}${f.price.value ? ' · ' + marketCompare(price, ref.market_price) : ''}`
       : '';
     updatePhotoRule(); // el precio o la carta elegida cambian si las fotos son obligatorias
+    renderPreview();
   }
   f.price.addEventListener('input', renderPriceHint);
 
@@ -979,7 +1110,7 @@ function renderCardForm(l, id, fxInfo) {
         for (const k of ['card_name', 'set_name', 'card_code', 'rarity']) f[k].value = r[k] || '';
         ref = { ref_id: r.ref_id, image: r.image_small || r.image_url, market_price: r.market_price_mxn, usd: r.market_price,
                 market_source: r.market_source, fx: foundFx };
-        box.innerHTML = ''; renderRef();
+        box.innerHTML = ''; document.getElementById('manual').open = false; renderRef();
         if (!f.price.value && r.market_price_mxn) { f.price.value = Math.round(r.market_price_mxn); renderPriceHint(); }
       }));
       document.getElementById('moreResults')?.addEventListener('click', e => search(Number(e.currentTarget.dataset.page)));
@@ -1005,7 +1136,7 @@ function renderCardForm(l, id, fxInfo) {
   }));
 
   // --- Fotos reales ---
-  const photos = setupPhotos(l.photos);
+  photos = setupPhotos(l.photos, () => renderPreview());
 
   // ¿Hacen falta fotos? Si la carta vale más de US$2.50 (precio de mercado o el precio que pones)
   function photosNeeded() {
@@ -1023,6 +1154,7 @@ function renderCardForm(l, id, fxInfo) {
   }
   renderRef();
   updatePhotoRule();
+  renderPreview();
 
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1483,7 +1615,7 @@ async function viewDecks() {
   if (!requireLogin()) return;
   const { decks } = await api('/api/decks');
   $app.innerHTML = `
-    <div class="hero">
+    <div class="page-head">
       <div><h1>🃏 Mis decks</h1><p class="muted">Arma tus decks de Pokémon y Yu-Gi-Oh!, guárdalos y compártelos si quieres.</p></div>
       <div class="t-actions"><a class="btn primary" href="#/decks/nuevo">+ Nuevo deck</a></div>
     </div>
@@ -1515,6 +1647,7 @@ function summaryBox(game, s, fx) {
   return `
     <div class="deck-summary ${s.valid ? 'ok' : ''}">
       <div class="deck-count">${counts} ${s.valid ? '<span class="badge legal">✔ Deck completo</span>' : ''}</div>
+      <div class="meter"><span style="width:${Math.min(100, Math.round(((game === 'pokemon' ? s.total : s.counts.main) / (game === 'pokemon' ? 60 : 40)) * 100))}%"></span></div>
       ${s.issues.length ? `<ul class="deck-issues">${s.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
       ${s.value_usd ? `<div class="card-meta">Valor estimado: <b>${s.value_mxn ? money(s.value_mxn) : usd(s.value_usd)}</b>
         (${usd(s.value_usd)} en TCGplayer${fx ? `, ${fxNote(fx)}` : ''})${s.unpriced_cards ? ` · ${s.unpriced_cards} carta(s) sin precio` : ''}</div>` : ''}
@@ -1528,7 +1661,7 @@ async function viewDeck(id) {
   const flat = groups.flatMap(g => g.cards);
   $app.innerHTML = `
     <p>${can_edit ? '<a href="#/decks">← Mis decks</a>' : `<a href="#/vendedor/${encodeURIComponent(d.username)}">← Perfil de @${esc(d.username)}</a>`}</p>
-    <div class="hero">
+    <div class="page-head">
       <div>
         <div><span class="badge ${d.game}">${GAME_LABEL[d.game]}</span> ${d.is_public ? '<span class="badge cond">🌐 Público</span>' : '<span class="badge cond">🔒 Privado</span>'}</div>
         <h1>${esc(d.name)}</h1>
@@ -1584,55 +1717,77 @@ async function viewDeckEditor(id) {
   let dirty = false;
   let fx = deck.summary?.fx || null;
 
+  // Diseño: datos del deck arriba; buscador a la izquierda; el deck a la derecha (fijo al bajar).
+  // En celular el deck se abre como panel desde la barra inferior "Ver mi deck".
+  const target = game === 'pokemon' ? 60 : 40;
   $app.innerHTML = `
     <p><a href="${id ? `#/decks/${id}` : '#/decks'}">← ${id ? 'Volver al deck' : 'Mis decks'}</a></p>
-    <div class="panel form-wide deck-editor">
-      <h1>${id ? 'Editar deck' : 'Nuevo deck'}</h1>
-      <div class="row">
-        <div class="field"><label>Nombre del deck</label><input id="dName" maxlength="60" value="${esc(deck.name)}" placeholder="ej. Charizard ex · Dragapult"></div>
+    <div class="page-head">
+      <div><h1>${id ? 'Editar deck' : 'Nuevo deck'}</h1><p class="muted">Busca cartas y tócalas para agregarlas. Se guarda aunque esté incompleto.</p></div>
+      <div class="t-actions only-desktop-flex">
+        <a class="btn" href="${id ? `#/decks/${id}` : '#/decks'}" data-cancel>Cancelar</a>
+        <button class="btn primary" data-save>${id ? 'Guardar cambios' : 'Guardar deck'}</button>
+      </div>
+    </div>
+    <div class="panel deck-meta">
+      <div class="deck-meta-row">
+        <div class="field grow"><label>Nombre del deck</label><input id="dName" maxlength="60" value="${esc(deck.name)}" placeholder="ej. Charizard ex · Dragapult"></div>
         <div class="field"><label>Juego</label>
-          <div class="tabs" id="dGame">${['pokemon', 'yugioh'].map(g => `<button type="button" class="tab ${game === g ? 'active' : ''}" data-game="${g}">${GAME_LABEL[g]}</button>`).join('')}</div></div>
+          <div class="segmented" id="dGame">${['pokemon', 'yugioh'].map(g => `<button type="button" class="${game === g ? 'active' : ''}" data-game="${g}">${GAME_LABEL[g]}</button>`).join('')}</div></div>
+        <label class="switch"><input type="checkbox" id="dPublic" ${deck.is_public ? 'checked' : ''}><span class="switch-ui"></span>
+          <span><b>Público</b><small>Visible con el enlace y en tu perfil</small></span></label>
       </div>
-      <div class="field"><label>Notas (opcional)</label><textarea id="dDesc" maxlength="1000" rows="2" placeholder="Estrategia, cambios pendientes, para qué torneo…">${esc(deck.description)}</textarea></div>
-      <label class="check"><input type="checkbox" id="dPublic" ${deck.is_public ? 'checked' : ''}> 🌐 Público: cualquiera con el enlace puede verlo y aparece en tu perfil</label>
+      <details class="manual"><summary>Notas del deck <span class="card-meta">(opcional)</span></summary>
+        <textarea id="dDesc" maxlength="1000" rows="2" placeholder="Estrategia, cambios pendientes, para qué torneo…">${esc(deck.description)}</textarea></details>
+    </div>
 
-      <div class="deck-cols">
-        <section>
-          <h2 class="step">Buscar cartas</h2>
-          <form id="dSearch" class="deck-search">
-            <input id="dq" placeholder="ej. Charizard ex, Ultra Ball, Dark Magician" autocomplete="off">
-            <button class="btn" type="submit">Buscar</button>
-          </form>
-          <p class="card-meta" id="dHint">Toca una carta para agregarla.${game === 'yugioh' ? ' Las de fusión, sincronía, XYZ y link van solas al Extra Deck.' : ''}</p>
-          <div class="lookup-results deck-results" id="dResults"></div>
-          <details class="deck-import">
-            <summary>Importar una lista en texto</summary>
-            <p class="card-meta">Pega la lista exportada de Pokémon TCG Live (o líneas como "4 Pikachu ex SVI 57" / "3 Dark Magician").
-              Las cartas importadas no traen imagen ni precio; puedes reemplazarlas buscándolas.</p>
-            <textarea id="dImport" rows="6" placeholder="Pokémon: 12&#10;4 Charmander PAF 7&#10;…"></textarea>
-            <button type="button" class="btn small" id="dImportBtn">Agregar al deck</button>
-          </details>
-        </section>
-        <section>
-          <h2 class="step">Tu deck</h2>
-          <div id="dSummary"></div>
-          <div id="dList"></div>
-        </section>
-      </div>
-      <p class="error" id="dErr"></p>
-      <div class="t-actions deck-save">
-        <button class="btn primary" id="dSave">${id ? 'Guardar cambios' : 'Guardar deck'}</button>
-        <a class="btn" href="${id ? `#/decks/${id}` : '#/decks'}" id="dCancel">Cancelar</a>
-      </div>
+    <div class="builder">
+      <section class="panel builder-search">
+        <form id="dSearch" class="search-row">
+          <input id="dq" type="search" placeholder="Buscar: Charizard ex, Ultra Ball, Dark Magician…" autocomplete="off" aria-label="Buscar cartas">
+          <button class="btn primary" type="submit">Buscar</button>
+        </form>
+        <div class="chips result-filter" id="dFilter"></div>
+        <p class="card-meta" id="dHint">Toca una carta para agregar una copia.${game === 'yugioh' ? ' Las de fusión, sincronía, XYZ y link van solas al Extra Deck.' : ''}</p>
+        <div class="lookup-results deck-results" id="dResults"></div>
+        <details class="manual deck-import">
+          <summary>📋 Importar una lista en texto</summary>
+          <p class="card-meta">Pega la lista exportada de Pokémon TCG Live (o líneas como "4 Pikachu ex SVI 57" / "3 Dark Magician").
+            Las cartas importadas no traen imagen ni precio; puedes reemplazarlas buscándolas.</p>
+          <textarea id="dImport" rows="6" placeholder="Pokémon: 12&#10;4 Charmander PAF 7&#10;…"></textarea>
+          <button type="button" class="btn small" id="dImportBtn">Agregar al deck</button>
+        </details>
+      </section>
+      <aside class="panel builder-deck" id="deckPanel">
+        <div class="deck-panel-head">
+          <h2>Tu deck</h2>
+          <button type="button" class="btn small only-mobile" id="closeDeck">Cerrar</button>
+        </div>
+        <div id="dSummary"></div>
+        <div id="dList"></div>
+        <p class="error" id="dErr"></p>
+      </aside>
+    </div>
+
+    <div class="deck-dock">
+      <button type="button" class="dock-count" id="openDeck"><span id="dockCount">0/${target}</span><small>Ver mi deck</small></button>
+      <button type="button" class="btn primary" data-save>${id ? 'Guardar' : 'Guardar deck'}</button>
     </div>`;
 
   const $list = document.getElementById('dList'), $sum = document.getElementById('dSummary'), $res = document.getElementById('dResults');
   const touch = () => { dirty = true; paint(); };
+  const $panel = document.getElementById('deckPanel');
+  document.getElementById('openDeck').addEventListener('click', () => { $panel.classList.add('open'); document.body.classList.add('lb-open'); });
+  document.getElementById('closeDeck').addEventListener('click', () => { $panel.classList.remove('open'); document.body.classList.remove('lb-open'); });
+  window.addEventListener('hashchange', () => document.body.classList.remove('lb-open'), { once: true });
 
   function paint() {
     const s = deckSummary(game, cards);
     if (fx && s.value_usd) s.value_mxn = Math.round(s.value_usd * fx.rate * 100) / 100;
     $sum.innerHTML = summaryBox(game, s, fx);
+    const goal = game === 'pokemon' ? 60 : 40;
+    document.getElementById('dockCount').textContent = `${game === 'pokemon' ? s.total : s.counts.main}/${goal}${s.valid ? ' ✔' : ''}`;
+    refreshResultBadges();
     const groups = deckGroups(game, cards);
     $list.innerHTML = groups.map(g => `
       <h3 class="deck-group">${esc(g.label)} <span class="muted">(${g.cards.reduce((n, c) => n + c.qty, 0)})</span></h3>
@@ -1673,34 +1828,65 @@ async function viewDeckEditor(id) {
   document.getElementById('dGame').addEventListener('click', (e) => {
     const b = e.target.closest('[data-game]'); if (!b || b.dataset.game === game) return;
     if (cards.length && !confirm('Cambiar de juego vacía el deck. ¿Continuar?')) return;
-    game = b.dataset.game; cards = []; $res.innerHTML = '';
-    document.querySelectorAll('#dGame .tab').forEach(t => t.classList.toggle('active', t === b));
-    document.getElementById('dHint').textContent = 'Toca una carta para agregarla.' +
+    game = b.dataset.game; cards = []; found = []; catFilter = ''; $res.innerHTML = ''; renderFilter();
+    document.querySelectorAll('#dGame button').forEach(t => t.classList.toggle('active', t === b));
+    document.getElementById('dHint').textContent = 'Toca una carta para agregar una copia.' +
       (game === 'yugioh' ? ' Las de fusión, sincronía, XYZ y link van solas al Extra Deck.' : '');
     touch();
   });
 
-  // Búsqueda (mismo buscador que al vender: páginas con "Ver más")
-  let found = [], query = '', source = '';
+  // Búsqueda (mismo buscador que al vender: páginas con "Ver más"), con filtro por tipo de carta
+  let found = [], query = '', source = '', hasMore = false, lastPage = 1, catFilter = '';
+  const FILTERS = { pokemon: ['pokemon', 'trainer', 'energy'], yugioh: ['monster', 'spell', 'trap', 'extra'] };
+  const inDeck = (refId) => cards.filter(c => c.ref_id && c.ref_id === refId).reduce((n, c) => n + c.qty, 0);
+
+  function renderFilter() {
+    const cats = FILTERS[game].filter(k => found.some(r => r.category === k));
+    document.getElementById('dFilter').innerHTML = cats.length > 1
+      ? [['', 'Todas'], ...cats.map(k => [k, CATEGORY_LABEL[k]])].map(([k, t]) =>
+          `<button type="button" class="chip ${catFilter === k ? 'active' : ''}" data-cat="${k}">${t}</button>`).join('')
+      : '';
+  }
+  function renderResults() {
+    const list = found.map((c, i) => [c, i]).filter(([c]) => !catFilter || c.category === catFilter);
+    $res.innerHTML = found.length ? `
+      <div class="lookup-count muted">${list.length}${hasMore && !catFilter ? '+' : ''} resultado(s)</div>
+      ${list.map(([c, i]) => `
+        <div class="result-card" data-ref="${esc(c.ref_id)}">
+          <button type="button" class="rc-add" data-add="${i}" title="Agregar ${esc(c.card_name)}">
+            ${safeImg(c.image_small || c.image_url) ? `<img src="${esc(c.image_small || c.image_url)}" alt="" loading="lazy">` : '<span class="no-img">✦</span>'}
+            <span class="rc-qty" hidden></span>
+            <span class="rc-plus">＋</span>
+          </button>
+          <div class="rc-info"><b class="one-line">${esc(c.card_name)}</b>
+            <div class="muted one-line">${esc([c.set_name, c.card_code].filter(Boolean).join(' · '))}</div></div>
+          <button type="button" class="rc-minus" data-sub="${i}" aria-label="Quitar una" hidden>−</button>
+        </div>`).join('')}
+      ${hasMore ? `<button type="button" class="btn small more" data-more="${lastPage + 1}">Ver más resultados</button>` : ''}`
+      : '<div class="lookup-count muted">Sin resultados. Prueba con el nombre en inglés o con el número de la carta.</div>';
+    refreshResultBadges();
+  }
+  // Cuántas copias de cada resultado ya están en el deck (insignia y botón "−")
+  function refreshResultBadges() {
+    $res.querySelectorAll('.result-card').forEach(el => {
+      const n = inDeck(el.dataset.ref);
+      const q = el.querySelector('.rc-qty');
+      q.hidden = !n; q.textContent = `×${n}`;
+      el.querySelector('.rc-minus').hidden = !n;
+      el.classList.toggle('in-deck', n > 0);
+    });
+  }
   async function search(page) {
-    if (page === 1) { found = []; $res.innerHTML = '<div class="lookup-count muted">Buscando…</div>'; }
+    if (page === 1) { found = []; catFilter = ''; $res.innerHTML = '<div class="lookup-count muted">Buscando…</div>'; renderFilter(); }
     try {
       const qs = new URLSearchParams({ game, q: query, page, ...(page > 1 && source ? { source } : {}) });
       const r = await api(`/api/lookup?${qs}`);
       if (page === 1) source = r.source || '';
       if (r.fx) fx = r.fx;
-      found.push(...r.results);
-      $res.innerHTML = found.length ? `
-        <div class="lookup-count muted">${found.length}${r.has_more ? '+' : ''} resultado(s)</div>
-        ${found.map((c, i) => `
-          <button type="button" data-add="${i}" title="Agregar ${esc(c.card_name)}">
-            ${safeImg(c.image_small || c.image_url) ? `<img src="${esc(c.image_small || c.image_url)}" alt="" loading="lazy">` : '<span class="no-img">✦</span>'}
-            <b>${esc(c.card_name)}</b>
-            <div class="muted">${esc([c.set_name, c.card_code].filter(Boolean).join(' · '))}</div>
-            <span class="add-badge">+ Agregar</span>
-          </button>`).join('')}
-        ${r.has_more ? `<button type="button" class="btn small more" data-more="${page + 1}">Ver más resultados</button>` : ''}`
-        : '<div class="lookup-count muted">Sin resultados. Prueba con el nombre en inglés o con el número de la carta.</div>';
+      const seen = new Set(found.map(x => x.ref_id));
+      found.push(...r.results.filter(x => !seen.has(x.ref_id)));
+      hasMore = r.has_more; lastPage = page;
+      renderFilter(); renderResults();
     } catch (err) { $res.innerHTML = `<div class="lookup-count error">${esc(err.message)}</div>`; }
   }
   document.getElementById('dSearch').addEventListener('submit', (e) => {
@@ -1709,9 +1895,20 @@ async function viewDeckEditor(id) {
     if (query.length < 2) { toast('Escribe al menos 2 letras'); return; }
     search(1);
   });
+  document.getElementById('dFilter').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-cat]'); if (!b) return;
+    catFilter = b.dataset.cat; renderFilter(); renderResults();
+  });
   $res.addEventListener('click', (e) => {
     const more = e.target.closest('[data-more]');
     if (more) { more.disabled = true; more.textContent = 'Cargando…'; search(Number(more.dataset.more)); return; }
+    const sub = e.target.closest('[data-sub]');
+    if (sub) {
+      const r = found[sub.dataset.sub];
+      const c = [...cards].reverse().find(x => x.ref_id === r.ref_id);
+      if (c) { c.qty -= 1; if (c.qty < 1) cards.splice(cards.indexOf(c), 1); touch(); }
+      return;
+    }
     const b = e.target.closest('[data-add]'); if (!b) return;
     const r = found[b.dataset.add];
     const section = game === 'yugioh' && r.category === 'extra' ? 'extra' : 'main';
@@ -1722,8 +1919,9 @@ async function viewDeckEditor(id) {
       image: r.image_small || r.image_url, image_large: r.image_url, category: r.category || '', basic_energy: !!r.basic_energy,
       section, qty: 1, price_usd: r.market_price || 0,
     });
-    b.classList.add('added'); setTimeout(() => b.classList.remove('added'), 500);
-    toast(`+1 ${r.card_name}`); touch();
+    const card = b.closest('.result-card');
+    card.classList.remove('pop'); void card.offsetWidth; card.classList.add('pop');
+    touch();
   });
 
   document.getElementById('dImportBtn').addEventListener('click', () => {
@@ -1736,19 +1934,25 @@ async function viewDeckEditor(id) {
 
   ['dName', 'dDesc'].forEach(k => document.getElementById(k).addEventListener('input', () => { dirty = true; }));
   document.getElementById('dPublic').addEventListener('change', () => { dirty = true; });
-  document.getElementById('dCancel').addEventListener('click', (e) => {
+  document.querySelectorAll('[data-cancel]').forEach(a => a.addEventListener('click', (e) => {
     if (dirty && !confirm('Tienes cambios sin guardar. ¿Salir sin guardar?')) e.preventDefault();
-  });
-  document.getElementById('dSave').addEventListener('click', async (e) => {
-    const btn = e.currentTarget, err = document.getElementById('dErr');
-    btn.disabled = true; err.textContent = '';
+  }));
+  document.querySelectorAll('[data-save]').forEach(btn => btn.addEventListener('click', async () => {
+    const err = document.getElementById('dErr');
+    const btns = document.querySelectorAll('[data-save]');
+    btns.forEach(b => (b.disabled = true)); err.textContent = '';
     try {
       const body = { name: document.getElementById('dName').value, game, description: document.getElementById('dDesc').value,
                      is_public: document.getElementById('dPublic').checked, cards };
       const { deck: saved } = await api(id ? `/api/decks/${id}` : '/api/decks', { method: id ? 'PUT' : 'POST', body });
-      dirty = false; toast(id ? 'Deck guardado' : '¡Deck creado!'); go(`#/decks/${saved.id}`);
-    } catch (e2) { err.textContent = e2.message; btn.disabled = false; }
-  });
+      dirty = false; document.body.classList.remove('lb-open');
+      toast(id ? 'Deck guardado' : '¡Deck creado!'); go(`#/decks/${saved.id}`);
+    } catch (e2) {
+      err.textContent = e2.message; toast(e2.message);
+      btns.forEach(b => (b.disabled = false));
+      if (!document.getElementById('dName').value.trim()) document.getElementById('dName').focus();
+    }
+  }));
 
   paint();
 }
@@ -1766,7 +1970,7 @@ async function viewAdmin(params) {
     u.blocked ? '<span class="badge sold">Suspendida</span>' : '<span class="badge cond">Activa</span>'].join(' ');
 
   $app.innerHTML = `
-    <div class="hero"><div><h1>🛡 Administración</h1>
+    <div class="page-head"><div><h1>🛡 Administración</h1>
       <p class="muted">Gestiona cuentas y todas las publicaciones de Macai TCG.</p></div></div>
     <div class="panel">
       <div class="tabs">${tabLink('summary', 'Resumen')}${tabLink('users', `Usuarios (${s.users})`)}${tabLink('listings', `Publicaciones (${listings.length})`)}</div>
@@ -1924,20 +2128,48 @@ function requireLogin() {
 
 // ---------- Router ----------
 
+let lastPath = null;
 async function router() {
   const [path, query = ''] = location.hash.slice(1).split('?');
   const parts = (path || '/').split('/').filter(Boolean);
   const params = new URLSearchParams(query);
-  window.scrollTo(0, 0);
+  // Si solo cambian los filtros (misma página), se conserva la posición; si es otra página, se sube al inicio
+  const samePage = lastPath === (path || '/');
+  const keepY = samePage ? window.scrollY : 0;
+  lastPath = path || '/';
+  if (!samePage) { window.scrollTo(0, 0); showLoading(); }
+  markActiveNav();
   refreshMatchBanner();
   try {
+    await route(parts, params);
+    if (samePage) requestAnimationFrame(() => window.scrollTo(0, keepY));
+  } catch (err) {
+    $app.innerHTML = `<div class="empty">${esc(err.message)} <br><a href="#/">Ir al catálogo</a></div>`;
+  }
+}
+
+// Mientras carga una página nueva: esqueleto animado (si tarda más de un instante)
+let loadingTimer;
+function showLoading() {
+  clearTimeout(loadingTimer);
+  const before = $app.innerHTML;
+  loadingTimer = setTimeout(() => {
+    if ($app.innerHTML !== before) return;    // ya se pintó la página nueva
+    $app.innerHTML = `<div class="skeleton-page" aria-label="Cargando">
+      <div class="sk sk-title"></div><div class="sk sk-line"></div>
+      <div class="sk-grid">${'<div class="sk sk-card"></div>'.repeat(8)}</div></div>`;
+  }, 180);
+}
+
+async function route(parts, params) {
+  {
     switch (parts[0]) {
       case undefined: return await viewCatalog(params);
       case 'carta': return await viewListing(parts[1]);
       case 'vendedor': return await viewSeller(decodeURIComponent(parts[1] || ''));
       case 'registro': return viewRegister();
       case 'login': return viewLogin();
-      case 'mis-cartas': return await viewMine();
+      case 'mis-cartas': return await viewMine(params);
       case 'vender': return await viewListingForm();
       case 'vender-accesorio': return await viewListingForm(null, 'accessory');
       case 'accesorios': return await viewAccessories(params);
@@ -1953,8 +2185,6 @@ async function router() {
         return await viewDecks();
       default: $app.innerHTML = '<div class="empty">Página no encontrada. <a href="#/">Ir al catálogo</a></div>';
     }
-  } catch (err) {
-    $app.innerHTML = `<div class="empty">${esc(err.message)} <br><a href="#/">Ir al catálogo</a></div>`;
   }
 }
 
