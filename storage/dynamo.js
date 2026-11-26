@@ -130,6 +130,43 @@ export const repo = {
     return strip(out.Attributes);
   },
 
+  // ---------- Decks ----------
+  // DECK#<id> / DECK, con GSI1 = DECKS#<userId> / fecha de actualización (no se mezcla con las cartas en venta)
+  async listDecks(userId, { onlyPublic = false } = {}) {
+    const items = (await queryAll({ TableName: TABLE, IndexName: 'GSI1', KeyConditionExpression: 'GSI1PK = :p',
+      ExpressionAttributeValues: { ':p': `DECKS#${userId}` }, ScanIndexForward: false })).map(strip);
+    const decks = onlyPublic ? items.filter(d => d.is_public) : items;
+    const u = await this.getUser(userId);
+    return decks.map(d => ({ ...d, username: u?.username, display_name: u?.display_name }));
+  },
+  async getDeck(id) {
+    const out = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `DECK#${id}`, SK: 'DECK' } }));
+    if (!out.Item) return null;
+    const d = strip(out.Item);
+    const u = await this.getUser(d.user_id);
+    return { ...d, username: u?.username, display_name: u?.display_name };
+  },
+  async createDeck(userId, d) {
+    const id = newId(), t = now();
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: {
+      PK: `DECK#${id}`, SK: 'DECK', type: 'deck', GSI1PK: `DECKS#${userId}`, GSI1SK: t,
+      id, user_id: userId, ...d, is_public: !!d.is_public, created_at: t, updated_at: t,
+    } }));
+    return this.getDeck(id);
+  },
+  async updateDeck(id, d) {
+    const current = await ddb.send(new GetCommand({ TableName: TABLE, Key: { PK: `DECK#${id}`, SK: 'DECK' } }));
+    if (!current.Item) return null;
+    const t = now();
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: {
+      ...current.Item, ...d, is_public: !!d.is_public, GSI1SK: t, updated_at: t,
+    } }));
+    return this.getDeck(id);
+  },
+  async deleteDeck(id) {
+    await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: `DECK#${id}`, SK: 'DECK' } }));
+  },
+
   // ---------- Administración de usuarios ----------
   // Lista completa con Scan (solo la usa el panel de administración; volumen pequeño)
   async listUsers() {

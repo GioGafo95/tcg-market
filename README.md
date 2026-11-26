@@ -44,6 +44,14 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
 - **Accesorios TCG** (`#/accesorios`): micas, deck boxes, tapetes, carpetas, toploaders, dados y más. Se publican
   como las cartas (fotos, contacto, editar, marcar vendido) con categoría, marca, estado (nuevo, como nuevo, usado)
   y para qué juego (Pokémon, Yu-Gi-Oh! o universal). No se mezclan con el catálogo de cartas.
+- **Decks** (`#/decks`): cada usuario arma y guarda los decks que quiera (máximo 100) de Pokémon o Yu-Gi-Oh!.
+  Se buscan cartas con el mismo buscador que al vender, se ajustan cantidades y, en Yu-Gi-Oh!, la sección (principal,
+  Extra o Side; las de fusión, sincronía, XYZ y link van solas al Extra Deck). Avisa en vivo si el deck no es legal
+  (Pokémon: 60 cartas y máximo 4 copias salvo energía básica; Yu-Gi-Oh!: principal 40-60, Extra y Side hasta 15,
+  máximo 3 copias) pero se guarda igual. Muestra el valor estimado en pesos (TCGplayer). Se puede importar o copiar
+  la lista en texto (formato de Pokémon TCG Live: "4 Pikachu ex SVI 57"). Los decks son privados; si se marcan como
+  públicos, cualquiera con el enlace los ve y aparecen en el perfil. Reglas en [public/deck-rules.js](public/deck-rules.js),
+  compartidas por el navegador y el servidor.
 - **Administradores** (`#/admin`): pueden editar, marcar como vendida o borrar cualquier publicación (también desde
   el detalle de la carta), gestionar cualquier torneo, editar los datos de las cuentas, nombrar o quitar
   administradores, suspender cuentas (no pueden entrar y sus publicaciones dejan de verse) y borrar cuentas con sus
@@ -131,6 +139,8 @@ El dominio se toma de la variable del repo `QA_DOMAIN` (por defecto `tcg.macai.c
 | PATCH | /api/listings/:id/status | Marcar vendida / disponible |
 | GET | /api/users/:username | Perfil público y sus cartas |
 | GET | /api/stats | Totales por juego |
+| GET/POST | /api/decks | Mis decks / crear deck |
+| GET/PUT/DELETE | /api/decks/:id | Ver (dueño, admin o público), editar y borrar un deck |
 | GET | /api/admin/overview | (admin) Resumen, cuentas y todas las publicaciones |
 | PUT/DELETE | /api/admin/users/:id | (admin) Editar perfil, rol `is_admin`, suspensión `blocked` / borrar cuenta |
 | GET | /healthz | Salud del servicio |

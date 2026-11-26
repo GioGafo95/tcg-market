@@ -38,7 +38,17 @@ const round2 = n => (Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : n
 
 // ---------- Pokémon ----------
 
-const PKM_FIELDS = 'id,name,number,rarity,set,images,tcgplayer';
+const PKM_FIELDS = 'id,name,number,rarity,set,images,tcgplayer,supertype,subtypes';
+
+// Tipo de carta para armar decks: pokemon | trainer | energy, y si es energía básica (sin límite de copias).
+// Si la fuente no lo dice, se deduce del nombre ("Fire Energy", "Basic Fire Energy").
+const BASIC_ENERGY_RE = /^(basic\s+)?(grass|fire|water|lightning|psychic|fighting|darkness|metal|fairy)\s+energy$/i;
+function pokemonKind(category, name, basicFlag) {
+  const c = String(category || '').toLowerCase();
+  const kind = c.startsWith('pok') ? 'pokemon' : c === 'trainer' ? 'trainer' : c === 'energy' ? 'energy'
+    : BASIC_ENERGY_RE.test(name || '') ? 'energy' : '';
+  return { category: kind, basic_energy: kind === 'energy' && (basicFlag ?? BASIC_ENERGY_RE.test(name || '')) };
+}
 const PKM_VARIANTS = ['holofoil', 'normal', 'reverseHolofoil', '1stEditionHolofoil', 'unlimitedHolofoil', '1stEditionNormal', 'unlimited', '1stEdition'];
 
 function pokemonPrice(c) {
@@ -61,6 +71,7 @@ const mapPokemon = c => ({
   image_small: c.images?.small || '',
   market_price: pokemonPrice(c),
   market_source: 'TCGplayer',
+  ...pokemonKind(c.supertype, c.name, c.supertype === 'Energy' ? (c.subtypes || []).includes('Basic') : undefined),
 });
 
 // TCGdex (fuente principal de Pokémon; también trae precios de TCGplayer). Sus ids llevan el prefijo "tcgdex:".
@@ -85,6 +96,7 @@ const mapTcgdex = c => ({
   image_small: c.image ? `${c.image}/low.webp` : '',
   market_price: tcgdexPrice(c),
   market_source: 'TCGplayer',
+  ...pokemonKind(c.category, c.name, c.category === 'Energy' && c.energyType ? c.energyType === 'Normal' : undefined),
 });
 
 // Cartas solo digitales de Pokémon TCG Pocket: no existen físicamente, se excluyen
@@ -191,6 +203,9 @@ function mapYugioh(c, set) {
     image_small: c.card_images?.[0]?.image_url_small || '',
     market_price: round2(parseFloat(set?.set_price)) ?? general,
     market_source: 'TCGplayer',
+    // Para decks: fusión, sincronía, XYZ y link van al Extra Deck; el resto (monstruo, mágica, trampa) al principal
+    category: /fusion|synchro|xyz|link/i.test(c.frameType || '') ? 'extra'
+      : c.frameType === 'spell' ? 'spell' : c.frameType === 'trap' ? 'trap' : 'monster',
   };
 }
 

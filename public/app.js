@@ -1,5 +1,6 @@
 // Macai TCG — SPA en JavaScript puro con rutas por hash (#/...)
 import { sceneSVG, emblemSVG } from './scene.js';
+import { SECTIONS, SECTION_LABEL, CATEGORY_LABEL, MAX_QTY, deckSummary, deckToText, parseDeckText, mergeCards } from './deck-rules.js';
 
 // Efecto holográfico: la carta se inclina en 3D y el brillo sigue al ratón
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -163,6 +164,7 @@ function renderNav() {
     ? `<a class="btn small" href="#/accesorios">🎒 Accesorios</a>
        <a class="btn small" href="#/torneos">⚔ Torneos</a>
        <a class="btn primary small" href="#/vender">+ Vender carta</a>
+       <a class="btn small" href="#/decks">🃏 Mis decks</a>
        <a class="btn small" href="#/mis-cartas">Mis publicaciones</a>
        <a class="btn small" href="#/perfil">Mi perfil</a>
        ${currentUser.is_admin ? '<a class="btn small admin-link" href="#/admin">🛡 Admin</a>' : ''}
@@ -573,7 +575,7 @@ function openLightbox(items, startIndex = 0, onChange = () => {}) {
 }
 
 async function viewSeller(username) {
-  const { user, listings } = await api(`/api/users/${encodeURIComponent(username)}`);
+  const { user, listings, decks } = await api(`/api/users/${encodeURIComponent(username)}`);
   $app.innerHTML = `
     <p><a href="#/">← Volver al catálogo</a></p>
     <h1>${esc(user.display_name)} <span class="muted">@${esc(user.username)}</span></h1>
@@ -581,7 +583,8 @@ async function viewSeller(username) {
       ${user.contact ? ' · Contacto: ' + esc(user.contact) : ''}</p>
     <h2>${listings.length} carta(s) a la venta</h2>
     ${listings.length ? `<div class="grid">${listings.map(l => cardTile(l, { showSeller: false })).join('')}</div>`
-                      : '<div class="empty">Este usuario no tiene cartas a la venta.</div>'}`;
+                      : '<div class="empty">Este usuario no tiene cartas a la venta.</div>'}
+    ${decks?.length ? `<h2 style="margin-top:2rem">Decks públicos</h2><div class="deck-grid">${decks.map(deckTile).join('')}</div>` : ''}`;
 }
 
 // Campos de perfil obligatorios (registro y "Mi perfil"): nombre, apellidos, zona y teléfono
@@ -1455,6 +1458,301 @@ function viewTdfImport() {
   drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) send(e.dataTransfer.files[0]); });
 }
 
+// ---------- Decks ----------
+
+const deckValue = (s) => (s.value_mxn ? money(s.value_mxn) : s.value_usd ? usd(s.value_usd) : '');
+const deckStatus = (s, game) => (s.valid
+  ? '<span class="badge legal">✔ Completo</span>'
+  : `<span class="badge cond">${s.total} / ${game === 'pokemon' ? 60 : '40-60'}</span>`);
+
+function deckTile(d) {
+  const s = d.summary;
+  return `
+    <a class="deck-tile" href="#/decks/${d.id}">
+      <div class="deck-cover">${safeImg(s.cover) ? `<img src="${esc(s.cover)}" alt="" loading="lazy">` : '<span class="placeholder">🃏</span>'}</div>
+      <div class="deck-info">
+        <div><span class="badge ${d.game}">${GAME_LABEL[d.game]}</span> ${deckStatus(s, d.game)}
+          ${d.is_public ? '<span class="badge cond" title="Cualquiera con el enlace puede verlo">🌐 Público</span>' : ''}</div>
+        <div class="card-name">${esc(d.name)}</div>
+        <div class="card-meta">${s.total} cartas${deckValue(s) ? ` · ≈ ${deckValue(s)}` : ''} · ${fmtDay(d.updated_at)}</div>
+      </div>
+    </a>`;
+}
+
+async function viewDecks() {
+  if (!requireLogin()) return;
+  const { decks } = await api('/api/decks');
+  $app.innerHTML = `
+    <div class="hero">
+      <div><h1>🃏 Mis decks</h1><p class="muted">Arma tus decks de Pokémon y Yu-Gi-Oh!, guárdalos y compártelos si quieres.</p></div>
+      <div class="t-actions"><a class="btn primary" href="#/decks/nuevo">+ Nuevo deck</a></div>
+    </div>
+    ${decks.length ? `<div class="deck-grid">${decks.map(deckTile).join('')}</div>`
+      : `<div class="empty">Aún no tienes decks. <a href="#/decks/nuevo">Arma el primero</a>: busca cartas y agrégalas,
+         o pega una lista exportada de Pokémon TCG Live.</div>`}`;
+}
+
+// Fila de una carta dentro de un deck (constructor y vista)
+const deckThumb = (c) => (safeImg(c.image)
+  ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : `<span class="no-img">${c.category === 'energy' ? '⚡' : '✦'}</span>`);
+
+// Grupos para mostrar: Pokémon por tipo de carta; Yu-Gi-Oh! por sección (y dentro, por tipo)
+function deckGroups(game, cards) {
+  const order = ['pokemon', 'trainer', 'energy', 'monster', 'spell', 'trap', 'extra', ''];
+  const byCat = (list) => [...list].sort((a, b) => order.indexOf(a.category || '') - order.indexOf(b.category || '') || a.name.localeCompare(b.name));
+  if (game === 'pokemon') {
+    return order.filter(k => ['pokemon', 'trainer', 'energy', ''].includes(k))
+      .map(k => ({ key: k, label: CATEGORY_LABEL[k], cards: byCat(cards.filter(c => (c.category || '') === k)) }))
+      .filter(g => g.cards.length);
+  }
+  return SECTIONS.yugioh.map(s => ({ key: s, label: SECTION_LABEL[s], cards: byCat(cards.filter(c => (c.section || 'main') === s)) }))
+    .filter(g => g.cards.length);
+}
+
+function summaryBox(game, s, fx) {
+  const counts = game === 'pokemon' ? `<b>${s.total}</b> / 60 cartas`
+    : `Principal <b>${s.counts.main}</b> · Extra <b>${s.counts.extra}</b> · Side <b>${s.counts.side}</b>`;
+  return `
+    <div class="deck-summary ${s.valid ? 'ok' : ''}">
+      <div class="deck-count">${counts} ${s.valid ? '<span class="badge legal">✔ Deck completo</span>' : ''}</div>
+      ${s.issues.length ? `<ul class="deck-issues">${s.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+      ${s.value_usd ? `<div class="card-meta">Valor estimado: <b>${s.value_mxn ? money(s.value_mxn) : usd(s.value_usd)}</b>
+        (${usd(s.value_usd)} en TCGplayer${fx ? `, ${fxNote(fx)}` : ''})${s.unpriced_cards ? ` · ${s.unpriced_cards} carta(s) sin precio` : ''}</div>` : ''}
+    </div>`;
+}
+
+async function viewDeck(id) {
+  const { deck: d, can_edit } = await api(`/api/decks/${id}`);
+  const s = d.summary;
+  const groups = deckGroups(d.game, d.cards);
+  const flat = groups.flatMap(g => g.cards);
+  $app.innerHTML = `
+    <p>${can_edit ? '<a href="#/decks">← Mis decks</a>' : `<a href="#/vendedor/${encodeURIComponent(d.username)}">← Perfil de @${esc(d.username)}</a>`}</p>
+    <div class="hero">
+      <div>
+        <div><span class="badge ${d.game}">${GAME_LABEL[d.game]}</span> ${d.is_public ? '<span class="badge cond">🌐 Público</span>' : '<span class="badge cond">🔒 Privado</span>'}</div>
+        <h1>${esc(d.name)}</h1>
+        <p class="muted">De <a href="#/vendedor/${encodeURIComponent(d.username)}">@${esc(d.username)}</a> · actualizado ${fmtDay(d.updated_at)}</p>
+        ${d.description ? `<p>${esc(d.description).replace(/\n/g, '<br>')}</p>` : ''}
+      </div>
+      <div class="t-actions">
+        ${can_edit ? `<a class="btn primary" href="#/decks/${d.id}/editar">Editar</a>` : ''}
+        <button class="btn" id="copyList">📋 Copiar lista</button>
+        ${d.is_public ? '<button class="btn" id="shareDeck">🔗 Compartir</button>' : ''}
+        ${can_edit || currentUser?.is_admin ? '<button class="btn danger" id="delDeck">Borrar</button>' : ''}
+      </div>
+    </div>
+    <div class="panel">${summaryBox(d.game, s, s.fx)}
+      ${groups.map(g => `
+        <h2 class="deck-group">${esc(g.label)} <span class="muted">(${g.cards.reduce((n, c) => n + c.qty, 0)})</span></h2>
+        <div class="deck-view-grid">${g.cards.map(c => `
+          <button type="button" class="deck-card" data-i="${flat.indexOf(c)}" title="${esc(c.name)}">
+            ${deckThumb(c)}<span class="qty">×${c.qty}</span>
+            ${safeImg(c.image) ? '' : `<span class="deck-card-name">${esc(c.name)}</span>`}
+          </button>`).join('')}</div>`).join('') || '<div class="empty">Este deck aún no tiene cartas.</div>'}
+    </div>`;
+
+  // Tocar una carta la abre en grande (solo las que tienen imagen)
+  const withImg = flat.filter(c => safeImg(c.image));
+  const items = withImg.map(c => ({ url: safeImg(c.image_large) || c.image, label: `${c.qty}× ${c.name}${c.card_code ? ` · ${c.card_code}` : ''}` }));
+  $app.querySelectorAll('.deck-card').forEach(b => b.addEventListener('click', () => {
+    const at = withImg.indexOf(flat[b.dataset.i]);
+    if (at >= 0) openLightbox(items, at);
+  }));
+  document.getElementById('copyList').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(deckToText(d.game, d.cards)); toast('Lista copiada'); }
+    catch { prompt('Copia la lista:', deckToText(d.game, d.cards)); }
+  });
+  document.getElementById('shareDeck')?.addEventListener('click', async () => {
+    const url = location.href;
+    if (navigator.share) { navigator.share({ title: d.name, url }).catch(() => {}); return; }
+    try { await navigator.clipboard.writeText(url); toast('Enlace copiado'); } catch { prompt('Copia el enlace:', url); }
+  });
+  document.getElementById('delDeck')?.addEventListener('click', async () => {
+    if (!confirm(`¿Borrar el deck "${d.name}"? No se puede deshacer.`)) return;
+    await api(`/api/decks/${d.id}`, { method: 'DELETE' });
+    toast('Deck borrado'); go(can_edit ? '#/decks' : '#/');
+  });
+}
+
+async function viewDeckEditor(id) {
+  if (!requireLogin()) return;
+  const deck = id ? (await api(`/api/decks/${id}`)).deck : { name: '', game: 'pokemon', description: '', is_public: false, cards: [] };
+  if (id && String(deck.user_id) !== String(currentUser.id)) { $app.innerHTML = '<div class="empty">Este deck no es tuyo.</div>'; return; }
+  let cards = deck.cards.map(c => ({ ...c }));
+  let game = deck.game;
+  let dirty = false;
+  let fx = deck.summary?.fx || null;
+
+  $app.innerHTML = `
+    <p><a href="${id ? `#/decks/${id}` : '#/decks'}">← ${id ? 'Volver al deck' : 'Mis decks'}</a></p>
+    <div class="panel form-wide deck-editor">
+      <h1>${id ? 'Editar deck' : 'Nuevo deck'}</h1>
+      <div class="row">
+        <div class="field"><label>Nombre del deck</label><input id="dName" maxlength="60" value="${esc(deck.name)}" placeholder="ej. Charizard ex · Dragapult"></div>
+        <div class="field"><label>Juego</label>
+          <div class="tabs" id="dGame">${['pokemon', 'yugioh'].map(g => `<button type="button" class="tab ${game === g ? 'active' : ''}" data-game="${g}">${GAME_LABEL[g]}</button>`).join('')}</div></div>
+      </div>
+      <div class="field"><label>Notas (opcional)</label><textarea id="dDesc" maxlength="1000" rows="2" placeholder="Estrategia, cambios pendientes, para qué torneo…">${esc(deck.description)}</textarea></div>
+      <label class="check"><input type="checkbox" id="dPublic" ${deck.is_public ? 'checked' : ''}> 🌐 Público: cualquiera con el enlace puede verlo y aparece en tu perfil</label>
+
+      <div class="deck-cols">
+        <section>
+          <h2 class="step">Buscar cartas</h2>
+          <form id="dSearch" class="deck-search">
+            <input id="dq" placeholder="ej. Charizard ex, Ultra Ball, Dark Magician" autocomplete="off">
+            <button class="btn" type="submit">Buscar</button>
+          </form>
+          <p class="card-meta" id="dHint">Toca una carta para agregarla.${game === 'yugioh' ? ' Las de fusión, sincronía, XYZ y link van solas al Extra Deck.' : ''}</p>
+          <div class="lookup-results deck-results" id="dResults"></div>
+          <details class="deck-import">
+            <summary>Importar una lista en texto</summary>
+            <p class="card-meta">Pega la lista exportada de Pokémon TCG Live (o líneas como "4 Pikachu ex SVI 57" / "3 Dark Magician").
+              Las cartas importadas no traen imagen ni precio; puedes reemplazarlas buscándolas.</p>
+            <textarea id="dImport" rows="6" placeholder="Pokémon: 12&#10;4 Charmander PAF 7&#10;…"></textarea>
+            <button type="button" class="btn small" id="dImportBtn">Agregar al deck</button>
+          </details>
+        </section>
+        <section>
+          <h2 class="step">Tu deck</h2>
+          <div id="dSummary"></div>
+          <div id="dList"></div>
+        </section>
+      </div>
+      <p class="error" id="dErr"></p>
+      <div class="t-actions deck-save">
+        <button class="btn primary" id="dSave">${id ? 'Guardar cambios' : 'Guardar deck'}</button>
+        <a class="btn" href="${id ? `#/decks/${id}` : '#/decks'}" id="dCancel">Cancelar</a>
+      </div>
+    </div>`;
+
+  const $list = document.getElementById('dList'), $sum = document.getElementById('dSummary'), $res = document.getElementById('dResults');
+  const touch = () => { dirty = true; paint(); };
+
+  function paint() {
+    const s = deckSummary(game, cards);
+    if (fx && s.value_usd) s.value_mxn = Math.round(s.value_usd * fx.rate * 100) / 100;
+    $sum.innerHTML = summaryBox(game, s, fx);
+    const groups = deckGroups(game, cards);
+    $list.innerHTML = groups.map(g => `
+      <h3 class="deck-group">${esc(g.label)} <span class="muted">(${g.cards.reduce((n, c) => n + c.qty, 0)})</span></h3>
+      ${g.cards.map(c => {
+        const i = cards.indexOf(c);
+        return `
+        <div class="deck-row">
+          <div class="deck-row-img">${deckThumb(c)}</div>
+          <div class="deck-row-name"><b>${esc(c.name)}</b>
+            <div class="card-meta">${esc([c.set_name || c.set_code_short, c.card_code].filter(Boolean).join(' · ') || (c.ref_id ? '' : 'importada'))}</div>
+            ${game === 'yugioh' ? `<select data-sec="${i}" aria-label="Sección">${SECTIONS.yugioh.map(sec => `<option value="${sec}" ${c.section === sec ? 'selected' : ''}>${SECTION_LABEL[sec]}</option>`).join('')}</select>` : ''}
+          </div>
+          <div class="qty-ctrl">
+            <button type="button" class="btn small" data-dec="${i}" aria-label="Quitar una">−</button>
+            <b>${c.qty}</b>
+            <button type="button" class="btn small" data-inc="${i}" aria-label="Agregar una">+</button>
+            <button type="button" class="btn small danger" data-rm="${i}" aria-label="Quitar del deck">✕</button>
+          </div>
+        </div>`;
+      }).join('')}`).join('') || '<div class="empty small">Tu deck está vacío. Busca cartas a la izquierda o importa una lista.</div>';
+  }
+
+  $list.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.inc) { const c = cards[b.dataset.inc]; c.qty = Math.min(MAX_QTY, c.qty + 1); }
+    else if (b.dataset.dec) { const c = cards[b.dataset.dec]; c.qty -= 1; if (c.qty < 1) cards.splice(b.dataset.dec, 1); }
+    else if (b.dataset.rm) cards.splice(b.dataset.rm, 1);
+    else return;
+    touch();
+  });
+  $list.addEventListener('change', (e) => {
+    if (e.target.dataset.sec === undefined) return;
+    cards[e.target.dataset.sec].section = e.target.value;
+    cards = mergeCards(cards); touch();
+  });
+
+  // Cambiar de juego vacía el deck (las cartas de un juego no sirven en el otro)
+  document.getElementById('dGame').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-game]'); if (!b || b.dataset.game === game) return;
+    if (cards.length && !confirm('Cambiar de juego vacía el deck. ¿Continuar?')) return;
+    game = b.dataset.game; cards = []; $res.innerHTML = '';
+    document.querySelectorAll('#dGame .tab').forEach(t => t.classList.toggle('active', t === b));
+    document.getElementById('dHint').textContent = 'Toca una carta para agregarla.' +
+      (game === 'yugioh' ? ' Las de fusión, sincronía, XYZ y link van solas al Extra Deck.' : '');
+    touch();
+  });
+
+  // Búsqueda (mismo buscador que al vender: páginas con "Ver más")
+  let found = [], query = '', source = '';
+  async function search(page) {
+    if (page === 1) { found = []; $res.innerHTML = '<div class="lookup-count muted">Buscando…</div>'; }
+    try {
+      const qs = new URLSearchParams({ game, q: query, page, ...(page > 1 && source ? { source } : {}) });
+      const r = await api(`/api/lookup?${qs}`);
+      if (page === 1) source = r.source || '';
+      if (r.fx) fx = r.fx;
+      found.push(...r.results);
+      $res.innerHTML = found.length ? `
+        <div class="lookup-count muted">${found.length}${r.has_more ? '+' : ''} resultado(s)</div>
+        ${found.map((c, i) => `
+          <button type="button" data-add="${i}" title="Agregar ${esc(c.card_name)}">
+            ${safeImg(c.image_small || c.image_url) ? `<img src="${esc(c.image_small || c.image_url)}" alt="" loading="lazy">` : '<span class="no-img">✦</span>'}
+            <b>${esc(c.card_name)}</b>
+            <div class="muted">${esc([c.set_name, c.card_code].filter(Boolean).join(' · '))}</div>
+            <span class="add-badge">+ Agregar</span>
+          </button>`).join('')}
+        ${r.has_more ? `<button type="button" class="btn small more" data-more="${page + 1}">Ver más resultados</button>` : ''}`
+        : '<div class="lookup-count muted">Sin resultados. Prueba con el nombre en inglés o con el número de la carta.</div>';
+    } catch (err) { $res.innerHTML = `<div class="lookup-count error">${esc(err.message)}</div>`; }
+  }
+  document.getElementById('dSearch').addEventListener('submit', (e) => {
+    e.preventDefault();
+    query = document.getElementById('dq').value.trim();
+    if (query.length < 2) { toast('Escribe al menos 2 letras'); return; }
+    search(1);
+  });
+  $res.addEventListener('click', (e) => {
+    const more = e.target.closest('[data-more]');
+    if (more) { more.disabled = true; more.textContent = 'Cargando…'; search(Number(more.dataset.more)); return; }
+    const b = e.target.closest('[data-add]'); if (!b) return;
+    const r = found[b.dataset.add];
+    const section = game === 'yugioh' && r.category === 'extra' ? 'extra' : 'main';
+    const existing = cards.find(c => c.ref_id && c.ref_id === r.ref_id && c.section === section);
+    if (existing) existing.qty = Math.min(MAX_QTY, existing.qty + 1);
+    else cards.push({
+      ref_id: r.ref_id, name: r.card_name, set_name: r.set_name, card_code: r.card_code, set_code_short: '',
+      image: r.image_small || r.image_url, image_large: r.image_url, category: r.category || '', basic_energy: !!r.basic_energy,
+      section, qty: 1, price_usd: r.market_price || 0,
+    });
+    b.classList.add('added'); setTimeout(() => b.classList.remove('added'), 500);
+    toast(`+1 ${r.card_name}`); touch();
+  });
+
+  document.getElementById('dImportBtn').addEventListener('click', () => {
+    const parsed = parseDeckText(game, document.getElementById('dImport').value);
+    if (!parsed.length) { toast('No se reconoció ninguna línea ("4 Nombre de la carta")'); return; }
+    cards = mergeCards([...cards, ...parsed]);
+    document.getElementById('dImport').value = '';
+    toast(`${parsed.reduce((n, c) => n + c.qty, 0)} cartas importadas`); touch();
+  });
+
+  ['dName', 'dDesc'].forEach(k => document.getElementById(k).addEventListener('input', () => { dirty = true; }));
+  document.getElementById('dPublic').addEventListener('change', () => { dirty = true; });
+  document.getElementById('dCancel').addEventListener('click', (e) => {
+    if (dirty && !confirm('Tienes cambios sin guardar. ¿Salir sin guardar?')) e.preventDefault();
+  });
+  document.getElementById('dSave').addEventListener('click', async (e) => {
+    const btn = e.currentTarget, err = document.getElementById('dErr');
+    btn.disabled = true; err.textContent = '';
+    try {
+      const body = { name: document.getElementById('dName').value, game, description: document.getElementById('dDesc').value,
+                     is_public: document.getElementById('dPublic').checked, cards };
+      const { deck: saved } = await api(id ? `/api/decks/${id}` : '/api/decks', { method: id ? 'PUT' : 'POST', body });
+      dirty = false; toast(id ? 'Deck guardado' : '¡Deck creado!'); go(`#/decks/${saved.id}`);
+    } catch (e2) { err.textContent = e2.message; btn.disabled = false; }
+  });
+
+  paint();
+}
+
 // ---------- Administración ----------
 
 async function viewAdmin(params) {
@@ -1648,6 +1946,11 @@ async function router() {
       case 'torneos': return parts[1] === 'nuevo' ? viewTournamentForm() : parts[1] === 'importar' ? viewTdfImport() : await viewTournaments();
       case 'torneo': return await viewTournament(parts[1]);
       case 'admin': return await viewAdmin(params);
+      case 'decks':
+        if (parts[1] === 'nuevo') return await viewDeckEditor();
+        if (parts[1] && parts[2] === 'editar') return await viewDeckEditor(parts[1]);
+        if (parts[1]) return await viewDeck(parts[1]);
+        return await viewDecks();
       default: $app.innerHTML = '<div class="empty">Página no encontrada. <a href="#/">Ir al catálogo</a></div>';
     }
   } catch (err) {

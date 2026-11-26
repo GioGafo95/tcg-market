@@ -798,3 +798,68 @@ body.lb-open { overflow: hidden; }
   .lb-prev, .lb-next { width: 40px; height: 40px; }
   .lb-tip { display: none; }
 }
+
+/* ---------- Decks ---------- */
+.badge.legal { background: #d9f7ea; color: #0f7a52; }
+.deck-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1.2rem; }
+.deck-tile {
+  display: flex; gap: .9rem; align-items: center; padding: .8rem; border-radius: var(--r); color: var(--ink);
+  background: var(--cream); box-shadow: var(--shadow); text-decoration: none; transition: transform .2s, box-shadow .2s;
+}
+.deck-tile:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
+.deck-cover { flex: 0 0 72px; aspect-ratio: 63 / 88; border-radius: 8px; overflow: hidden; background: #efe6ff; display: grid; place-items: center; }
+.deck-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.deck-cover .placeholder { font-size: 1.8rem; }
+.deck-info { min-width: 0; display: flex; flex-direction: column; gap: .3rem; }
+.deck-info .card-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+label.check { display: flex; gap: .5rem; align-items: center; font-weight: 700; color: var(--ink-soft); margin: .2rem 0 1rem; cursor: pointer; }
+label.check input { width: auto; }
+.deck-editor { max-width: 1200px; }
+.deck-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+@media (max-width: 860px) { .deck-cols { grid-template-columns: 1fr; } }
+.deck-search { display: flex; gap: .5rem; }
+.deck-results { max-height: 620px; }
+.deck-results button { position: relative; }
+.deck-results .add-badge {
+  display: inline-block; margin-top: .3rem; font-size: .75rem; font-weight: 800; color: var(--violet);
+  padding: .1rem .5rem; border-radius: 999px; background: #efe6ff;
+}
+.deck-results button.added { box-shadow: inset 0 0 0 3px var(--green); }
+.deck-import { margin-top: 1rem; }
+.deck-import summary { cursor: pointer; font-weight: 800; color: var(--violet); }
+.deck-import textarea { width: 100%; margin: .5rem 0; font-family: ui-monospace, monospace; font-size: .85rem; }
+
+.deck-summary { padding: .8rem 1rem; border-radius: 12px; background: #fff6d6; border: 1px solid #f3d27a; margin-bottom: 1rem; }
+.deck-summary.ok { background: #e6f9f0; border-color: #9fe3c4; }
+.deck-count { font-size: 1.05rem; }
+.deck-issues { margin: .4rem 0 .3rem 1.1rem; padding: 0; font-size: .88rem; color: #8a5a00; }
+.deck-group { font-size: 1rem; margin: 1rem 0 .4rem; color: var(--ink); }
+.deck-row { display: grid; grid-template-columns: 40px 1fr auto; gap: .6rem; align-items: center; padding: .35rem 0; border-bottom: 1px solid #ece4f8; }
+.deck-row-img img, .deck-row-img .no-img { width: 40px; aspect-ratio: 63 / 88; border-radius: 4px; object-fit: cover; display: grid; place-items: center; background: #efe6ff; color: #b6a6dc; }
+.deck-row-name { min-width: 0; }
+.deck-row-name b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deck-row-name select { margin-top: .25rem; padding: .15rem .4rem; font-size: .8rem; width: auto; }
+.qty-ctrl { display: flex; align-items: center; gap: .3rem; }
+.qty-ctrl b { min-width: 1.6rem; text-align: center; font-size: 1.05rem; }
+.qty-ctrl .btn { padding: .2rem .55rem; min-width: 30px; }
+.empty.small { padding: 1.5rem 1rem; font-size: .95rem; box-shadow: none; background: #f7f1ff; }
+.deck-save { margin-top: 1rem; }
+
+.deck-view-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: .8rem; }
+.deck-card {
+  position: relative; padding: 0; border: 0; background: #efe6ff; border-radius: 8px; overflow: hidden; cursor: zoom-in;
+  aspect-ratio: 63 / 88; display: grid; place-items: center; box-shadow: 0 6px 14px -8px rgba(43,29,74,.5); transition: transform .2s;
+}
+.deck-card:hover { transform: translateY(-4px); }
+.deck-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.deck-card .no-img { font-size: 1.8rem; color: #b6a6dc; }
+.deck-card .qty {
+  position: absolute; right: 6px; bottom: 6px; font-weight: 900; font-size: .95rem; color: #fff;
+  padding: .1rem .5rem; border-radius: 999px; background: rgba(30, 20, 64, .85);
+}
+.deck-card-name { position: absolute; left: 6px; right: 6px; top: 8px; font-size: .78rem; font-weight: 800; color: var(--ink); text-align: center; }
+@media (max-width: 600px) {
+  .deck-view-grid { grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+  .deck-row { grid-template-columns: 34px 1fr auto; }
+}

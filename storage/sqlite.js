@@ -94,6 +94,20 @@ db.exec(`
     PRIMARY KEY (tournament_id, pokemon_id)
   );
   CREATE INDEX IF NOT EXISTS idx_tdf_entries_pid ON tdf_entries(pokemon_id);
+
+  -- Decks de cada usuario. cards = JSON con las cartas (ver public/deck-rules.js)
+  CREATE TABLE IF NOT EXISTS decks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    game        TEXT NOT NULL CHECK (game IN ('pokemon', 'yugioh')),
+    description TEXT DEFAULT '',
+    is_public   INTEGER NOT NULL DEFAULT 0,
+    cards       TEXT NOT NULL DEFAULT '[]',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_decks_user ON decks(user_id);
 `);
 
 // Torneos: origen ('app' o 'tdf'), ID del torneo en TOM y datos importados (JSON)
@@ -162,6 +176,13 @@ function listingOut(row) {
   return { ...row, seller_blocked: !!row.seller_blocked, created_at: iso(row.created_at), updated_at: iso(row.updated_at), photos };
 }
 
+const DECK_SELECT = `
+  SELECT d.*, u.username, u.display_name FROM decks d JOIN users u ON u.id = d.user_id`;
+const deckOut = d => d && {
+  ...d, is_public: !!d.is_public, cards: JSON.parse(d.cards || '[]'),
+  created_at: iso(d.created_at), updated_at: iso(d.updated_at),
+};
+
 const TOURNAMENT_SELECT = `
   SELECT t.*, u.username AS organizer_username, u.display_name AS organizer_name,
     CASE WHEN t.source = 'tdf' THEN t.tdf_players
@@ -204,6 +225,24 @@ export const repo = {
       .run(display_name, first_name, last_name, location, contact, id);
     return this.getUser(id);
   },
+
+  // ---------- Decks ----------
+  async listDecks(userId, { onlyPublic = false } = {}) {
+    return db.prepare(`${DECK_SELECT} WHERE d.user_id = ? ${onlyPublic ? 'AND d.is_public = 1' : ''} ORDER BY d.updated_at DESC, d.id DESC`)
+      .all(userId).map(deckOut);
+  },
+  async getDeck(id) { return deckOut(db.prepare(`${DECK_SELECT} WHERE d.id = ?`).get(Number(id))); },
+  async createDeck(userId, d) {
+    const { lastInsertRowid } = db.prepare(`INSERT INTO decks (user_id, name, game, description, is_public, cards)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(userId, d.name, d.game, d.description, d.is_public ? 1 : 0, JSON.stringify(d.cards));
+    return this.getDeck(lastInsertRowid);
+  },
+  async updateDeck(id, d) {
+    db.prepare(`UPDATE decks SET name = ?, game = ?, description = ?, is_public = ?, cards = ?, updated_at = datetime('now')
+      WHERE id = ?`).run(d.name, d.game, d.description, d.is_public ? 1 : 0, JSON.stringify(d.cards), Number(id));
+    return this.getDeck(id);
+  },
+  async deleteDeck(id) { db.prepare('DELETE FROM decks WHERE id = ?').run(Number(id)); },
 
   // ---------- Administración de usuarios ----------
   async listUsers() {

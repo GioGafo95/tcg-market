@@ -5,6 +5,7 @@ import { searchCards, getCardByRef, cacheRefImage } from './cards.js';
 import { getUsdMxn, toMxn } from './fx.js';
 import { outcome, opponentOf, standings, pairRound, streaks } from './tournaments.js';
 import { parseTdf, TdfError, shortName } from './tdf.js';
+import { DECK_GAMES, SECTIONS, MAX_ENTRIES, MAX_QTY, deckSummary } from './public/deck-rules.js';
 
 const fxInfo = fx => (fx ? { rate: Math.round(fx.rate * 10000) / 10000, date: fx.date, source: fx.source } : null);
 
@@ -685,13 +686,97 @@ app.delete('/api/tournaments/:id', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Decks ----------
+
+const safeImageUrl = v => (typeof v === 'string' && /^https:\/\/[^\s"'<>]{4,400}$/.test(v) ? v : '');
+const DECK_CATEGORIES = ['pokemon', 'trainer', 'energy', 'monster', 'spell', 'trap', 'extra', ''];
+
+function validateDeck(body) {
+  const name = str(body.name, 60).replace(/\s+/g, ' ');
+  const game = DECK_GAMES.includes(body.game) ? body.game : null;
+  if (name.length < 2) throw new HttpError(400, 'Ponle un nombre al deck (mínimo 2 caracteres).');
+  if (!game) throw new HttpError(400, 'Elige el juego del deck (Pokémon o Yu-Gi-Oh!).');
+  const list = Array.isArray(body.cards) ? body.cards : [];
+  if (list.length > MAX_ENTRIES) throw new HttpError(400, `Un deck admite máximo ${MAX_ENTRIES} cartas distintas.`);
+  const cards = list.map(c => {
+    const qty = Number(c?.qty);
+    const cardName = str(c?.name, 120);
+    if (!cardName || !Number.isInteger(qty) || qty < 1 || qty > MAX_QTY) return null;
+    const price = Number(c.price_usd);
+    return {
+      ref_id: str(c.ref_id, 80), name: cardName, set_name: str(c.set_name, 120), card_code: str(c.card_code, 40),
+      set_code_short: str(c.set_code_short, 10), image: safeImageUrl(c.image), image_large: safeImageUrl(c.image_large),
+      category: DECK_CATEGORIES.includes(c.category) ? c.category : '', basic_energy: game === 'pokemon' && !!c.basic_energy,
+      section: SECTIONS[game].includes(c.section) ? c.section : 'main', qty,
+      price_usd: Number.isFinite(price) && price > 0 && price < 100000 ? Math.round(price * 100) / 100 : 0,
+    };
+  }).filter(Boolean);
+  return { name, game, description: str(body.description, 1000), is_public: !!body.is_public, cards };
+}
+
+// Deck con su resumen (total, si es legal, valor estimado en pesos con el tipo de cambio del día)
+function deckOut(d, fx, { withCards = true } = {}) {
+  if (!d) return d;
+  const summary = deckSummary(d.game, d.cards || []);
+  const { cards, ...rest } = d;
+  return {
+    ...rest, ...(withCards ? { cards } : {}),
+    summary: { ...summary, value_mxn: toMxn(summary.value_usd, fx), fx: summary.value_usd ? fxInfo(fx) : null },
+  };
+}
+
+// Un deck lo ven su dueño y los administradores; si es público, cualquiera con el enlace
+async function readableDeck(req) {
+  const d = await repo.getDeck(str(req.params.id, 40));
+  const own = d && req.user && sameId(d.user_id, req.user.id);
+  if (!d || !(own || d.is_public || isAdmin(req.user))) throw new HttpError(404, 'Deck no encontrado.');
+  return { d, own };
+}
+async function ownDeck(req, { allowAdmin = false } = {}) {
+  const d = await repo.getDeck(str(req.params.id, 40));
+  if (!d) throw new HttpError(404, 'Deck no encontrado.');
+  if (!sameId(d.user_id, req.user.id) && !(allowAdmin && isAdmin(req.user))) throw new HttpError(403, 'Este deck no es tuyo.');
+  return d;
+}
+
+app.get('/api/decks', requireAuth, async (req, res) => {
+  const decks = await repo.listDecks(req.user.id);
+  res.json({ decks: decks.map(d => deckOut(d, req.fx, { withCards: false })) });
+});
+
+app.post('/api/decks', requireAuth, async (req, res) => {
+  const mine = await repo.listDecks(req.user.id);
+  if (mine.length >= 100) throw new HttpError(400, 'Llegaste al máximo de 100 decks. Borra alguno para crear otro.');
+  const d = await repo.createDeck(req.user.id, validateDeck(req.body));
+  res.status(201).json({ deck: deckOut(d, req.fx) });
+});
+
+app.get('/api/decks/:id', async (req, res) => {
+  const { d, own } = await readableDeck(req);
+  res.json({ deck: deckOut(d, req.fx), can_edit: own });
+});
+
+app.put('/api/decks/:id', requireAuth, async (req, res) => {
+  const d = await ownDeck(req);
+  res.json({ deck: deckOut(await repo.updateDeck(d.id, validateDeck(req.body)), req.fx) });
+});
+
+app.delete('/api/decks/:id', requireAuth, async (req, res) => {
+  const d = await ownDeck(req, { allowAdmin: true });
+  await repo.deleteDeck(d.id);
+  res.json({ ok: true });
+});
+
 // ---------- Perfiles públicos y estadísticas ----------
 
 app.get('/api/users/:username', async (req, res) => {
   const user = await repo.findUserByUsername(str(req.params.username, 30));
   if (!user || (user.blocked && !isAdmin(req.user))) throw new HttpError(404, 'Usuario no encontrado.');
-  const listings = await repo.listListings({ userId: user.id, onlyAvailable: true });
-  res.json({ user: publicUser(user), listings: listings.map(l => listingOut(l, req.fx)) });
+  const [listings, decks] = await Promise.all([
+    repo.listListings({ userId: user.id, onlyAvailable: true }), repo.listDecks(user.id, { onlyPublic: true }),
+  ]);
+  res.json({ user: publicUser(user), listings: listings.map(l => listingOut(l, req.fx)),
+             decks: decks.map(d => deckOut(d, req.fx, { withCards: false })) });
 });
 
 app.get('/api/stats', async (_req, res) => res.json(await repo.stats()));
@@ -759,6 +844,7 @@ app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
     await repo.deleteListing(l.id);
     await Promise.all((l.photos || []).map(p => deleteFile(photoKey(p.filename)).catch(() => {})));
   }
+  for (const d of await repo.listDecks(user.id)) await repo.deleteDeck(d.id);
   await repo.deleteUser(user.id);
   res.json({ ok: true, deleted_listings: listings.length });
 });

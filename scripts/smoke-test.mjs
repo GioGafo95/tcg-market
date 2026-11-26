@@ -36,6 +36,7 @@ const run = async () => {
     await call('/api/auth/me', { expect: 200 }); ok('sesión (anónima)');
     await call('/api/listings/mine', { expect: 401 }); ok('rutas privadas protegidas');
     await call('/api/admin/overview', { expect: 401 }); ok('administración protegida');
+    await call('/api/decks', { expect: 401 }); ok('decks protegidos');
     const tl = await call('/api/tournaments', { expect: 200 }); ok(`torneos: ${tl.data.tournaments.length}`);
     await call('/api/tournaments/me', { expect: 401 }); ok('panel de torneos protegido');
     console.log('\nTodo OK (solo lectura).');
@@ -224,6 +225,22 @@ const run = async () => {
   cookie = host;
   await call(`/api/tournaments/${imp.data.tournament.id}`, { method: 'DELETE', expect: 200 });
   ok('torneo importado quitado');
+
+  // Decks: crear (privado), reglas, visibilidad pública y borrar
+  const deck = (await call('/api/decks', { method: 'POST', expect: 201, body: { name: 'Prueba de humo', game: 'pokemon', cards: [
+    { name: 'Pikachu', category: 'pokemon', qty: 5 }, { name: 'Basic Lightning Energy', category: 'energy', basic_energy: true, qty: 55 },
+  ] } })).data.deck;
+  if (deck.summary.total !== 60 || deck.summary.valid || !deck.summary.issues.some(i => i.includes('Pikachu')))
+    throw new Error(`reglas de deck incorrectas: ${JSON.stringify(deck.summary)}`);
+  const saveCookie = cookie; cookie = '';
+  await call(`/api/decks/${deck.id}`, { expect: 404 });
+  cookie = saveCookie;
+  await call(`/api/decks/${deck.id}`, { method: 'PUT', expect: 200, body: { ...deck, is_public: true } });
+  cookie = '';
+  await call(`/api/decks/${deck.id}`, { expect: 200 });
+  cookie = saveCookie;
+  await call(`/api/decks/${deck.id}`, { method: 'DELETE', expect: 200 });
+  ok('deck creado (60 cartas, avisa 5 copias), privado → público, y borrado');
   await call('/api/auth/logout', { method: 'POST', expect: 200 });
   const me = await call('/api/auth/me', { expect: 200 });
   if (me.data.user) throw new Error('la sesión sigue activa tras cerrar sesión');
