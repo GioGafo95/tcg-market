@@ -15,6 +15,10 @@ const SECURE_COOKIES = process.env.COOKIE_SECURE === 'true' || process.env.NODE_
 
 const GAMES = ['pokemon', 'yugioh'];
 const CONDITIONS = ['NM', 'LP', 'MP', 'HP', 'DMG'];
+// Accesorios: categoría, estado propio y juego (o 'any' si sirve para cualquiera)
+const ACC_CATEGORIES = ['sleeves', 'deckbox', 'playmat', 'binder', 'toploader', 'dice', 'storage', 'other'];
+const ACC_CONDITIONS = ['NEW', 'LIKE_NEW', 'USED'];
+const ACC_GAMES = [...GAMES, 'any'];
 const MAX_PHOTOS = 6;
 const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 
@@ -216,18 +220,35 @@ function listingOut(l, fx) {
 }
 
 function validateListing(body) {
+  const kind = body.kind === 'accessory' ? 'accessory' : 'card';
   const game = str(body.game, 10);
   const card_name = str(body.card_name, 120);
   const price = Number(body.price);
   const quantity = body.quantity === undefined ? 1 : Number(body.quantity);
-  const condition = CONDITIONS.includes(body.condition) ? body.condition : 'NM';
 
-  if (!GAMES.includes(game)) throw new HttpError(400, 'Elige un juego válido (Pokémon o Yu-Gi-Oh!).');
-  if (!card_name) throw new HttpError(400, 'El nombre de la carta es obligatorio.');
   if (!Number.isFinite(price) || price < 0) throw new HttpError(400, 'El precio no es válido.');
   if (!Number.isInteger(quantity) || quantity < 0 || quantity > 999) throw new HttpError(400, 'La cantidad no es válida.');
 
+  // Accesorio: nombre, categoría, marca (en set_name), estado y para qué juego. Sin referencia ni precio de mercado.
+  if (kind === 'accessory') {
+    if (!card_name) throw new HttpError(400, 'Escribe el nombre del accesorio.');
+    if (!ACC_GAMES.includes(game)) throw new HttpError(400, 'Indica para qué juego es el accesorio.');
+    if (!ACC_CATEGORIES.includes(body.category)) throw new HttpError(400, 'Elige la categoría del accesorio.');
+    return {
+      kind, category: body.category, game, card_name,
+      condition: ACC_CONDITIONS.includes(body.condition) ? body.condition : 'NEW',
+      price: Math.round(price * 100) / 100, quantity,
+      set_name: str(body.set_name, 120), card_code: '', rarity: '', language: '',
+      notes: str(body.notes, 1000), ref_id: '',
+    };
+  }
+
+  const condition = CONDITIONS.includes(body.condition) ? body.condition : 'NM';
+  if (!GAMES.includes(game)) throw new HttpError(400, 'Elige un juego válido (Pokémon o Yu-Gi-Oh!).');
+  if (!card_name) throw new HttpError(400, 'El nombre de la carta es obligatorio.');
+
   return {
+    kind, category: '',
     game, card_name, condition,
     price: Math.round(price * 100) / 100, quantity,
     set_name: str(body.set_name, 120), card_code: str(body.card_code, 40),
@@ -268,21 +289,26 @@ async function storePhotos(dataUrls) {
 }
 
 // Catálogo público: todas las cartas en circulación
+// kind=accessory → accesorios (por defecto, cartas). En accesorios, filtrar por un juego incluye los universales.
 app.get('/api/listings', async (req, res) => {
-  const listings = await repo.listListings({
-    onlyAvailable: true,
-    game: GAMES.includes(req.query.game) ? req.query.game : '',
+  const kind = req.query.kind === 'accessory' ? 'accessory' : 'card';
+  const game = (kind === 'accessory' ? ACC_GAMES : GAMES).includes(req.query.game) ? req.query.game : '';
+  let listings = await repo.listListings({
+    onlyAvailable: true, kind,
+    game: kind === 'card' || game === 'any' ? game : '',
+    category: kind === 'accessory' && ACC_CATEGORIES.includes(req.query.category) ? req.query.category : '',
     condition: CONDITIONS.includes(req.query.condition) ? req.query.condition : '',
-    set: str(req.query.set, 120),
+    set: kind === 'card' ? str(req.query.set, 120) : '',
     q: str(req.query.q, 100), seller: str(req.query.seller, 30), sort: str(req.query.sort, 20),
   });
+  if (kind === 'accessory' && GAMES.includes(game)) listings = listings.filter(l => l.game === game || l.game === 'any');
   res.json({ listings: listings.map(l => listingOut(l, req.fx)) });
 });
 
 // Expansiones que tienen cartas en venta (para el filtro del catálogo), con cuántas publicaciones hay de cada una
 app.get('/api/listings/sets', async (req, res) => {
   const game = GAMES.includes(req.query.game) ? req.query.game : '';
-  const listings = await repo.listListings({ onlyAvailable: true, game });
+  const listings = await repo.listListings({ onlyAvailable: true, game, kind: 'card' });
   const counts = new Map();
   for (const l of listings) {
     const name = (l.set_name || '').trim();
@@ -312,7 +338,9 @@ function photosRequired(marketUsd, priceMxn, fx) {
   const sellerUsd = priceMxn / (fx?.rate || FALLBACK_USD_MXN);
   return Math.max(Number(marketUsd) || 0, sellerUsd) > PHOTO_MIN_USD;
 }
-const PHOTO_REQUIRED_MSG = `Esta carta vale más de US$${PHOTO_MIN_USD.toFixed(2)}: sube al menos una foto real de tu carta.`;
+const photoRequiredMsg = kind => (kind === 'accessory'
+  ? `Este accesorio vale más de US$${PHOTO_MIN_USD.toFixed(2)}: sube al menos una foto real.`
+  : `Esta carta vale más de US$${PHOTO_MIN_USD.toFixed(2)}: sube al menos una foto real de tu carta.`);
 
 app.post('/api/listings', requireAuth, async (req, res) => {
   const data = validateListing(req.body);
@@ -320,7 +348,7 @@ app.post('/api/listings', requireAuth, async (req, res) => {
   if (newPhotos.length > MAX_PHOTOS) throw new HttpError(400, `Máximo ${MAX_PHOTOS} fotos por carta.`);
 
   const ref = await resolveReference(data);
-  if (!newPhotos.length && photosRequired(ref.market_price, data.price, req.fx)) throw new HttpError(400, PHOTO_REQUIRED_MSG);
+  if (!newPhotos.length && photosRequired(ref.market_price, data.price, req.fx)) throw new HttpError(400, photoRequiredMsg(data.kind));
   const photos = await storePhotos(newPhotos);
   const listing = await repo.createListing(req.user.id, { ...data, ...ref }, photos);
   res.status(201).json({ listing: listingOut(listing, req.fx) });
@@ -346,7 +374,7 @@ app.put('/api/listings/:id', requireAuth, async (req, res) => {
   if (kept.length + newPhotos.length > MAX_PHOTOS) throw new HttpError(400, `Máximo ${MAX_PHOTOS} fotos por carta.`);
 
   const ref = await resolveReference(data, existing);
-  if (kept.length + newPhotos.length < 1 && photosRequired(ref.market_price, data.price, req.fx)) throw new HttpError(400, PHOTO_REQUIRED_MSG);
+  if (kept.length + newPhotos.length < 1 && photosRequired(ref.market_price, data.price, req.fx)) throw new HttpError(400, photoRequiredMsg(data.kind));
   const added = await storePhotos(newPhotos);
   const status = ['sold', 'available'].includes(req.body.status) ? req.body.status : existing.status;
 

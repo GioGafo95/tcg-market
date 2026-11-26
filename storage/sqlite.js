@@ -28,7 +28,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS listings (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    game        TEXT NOT NULL CHECK (game IN ('pokemon', 'yugioh')),
+    game        TEXT NOT NULL CHECK (game IN ('pokemon', 'yugioh', 'any')),
     card_name   TEXT NOT NULL,
     set_name    TEXT DEFAULT '',
     card_code   TEXT DEFAULT '',
@@ -114,8 +114,35 @@ db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_pokemon_id ON users(pokemon
 const cols = db.prepare('PRAGMA table_info(listings)').all().map(c => c.name);
 for (const [name, def] of Object.entries({
   ref_id: "TEXT DEFAULT ''", market_price: 'REAL', market_source: "TEXT DEFAULT ''", market_updated: 'TEXT',
+  // Tipo de publicación: carta o accesorio (micas, deck box, tapetes…) y su categoría
+  kind: "TEXT NOT NULL DEFAULT 'card'", category: "TEXT DEFAULT ''",
 })) {
   if (!cols.includes(name)) db.exec(`ALTER TABLE listings ADD COLUMN ${name} ${def}`);
+}
+
+// Los accesorios pueden ser para cualquier juego (game = 'any'). Las bases creadas antes tienen una restricción
+// que solo acepta pokemon/yugioh: se reconstruye la tabla conservando todos los datos y sus fotos.
+const listingsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'listings'").get().sql;
+if (!listingsSql.includes("'any'")) {
+  const colList = db.prepare('PRAGMA table_info(listings)').all().map(c => c.name).join(', ');
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN');
+    db.exec(listingsSql.replace(/CREATE TABLE "?listings"?/, 'CREATE TABLE listings_new')
+      .replace(/CHECK \(game IN \('pokemon', 'yugioh'\)\)/, "CHECK (game IN ('pokemon', 'yugioh', 'any'))"));
+    db.exec(`INSERT INTO listings_new (${colList}) SELECT ${colList} FROM listings`);
+    db.exec('DROP TABLE listings');
+    db.exec('ALTER TABLE listings_new RENAME TO listings');
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_listings_game ON listings(game);
+             CREATE INDEX IF NOT EXISTS idx_listings_user ON listings(user_id);
+             CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);`);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 // SQLite guarda fechas como "YYYY-MM-DD HH:MM:SS" (UTC); se exponen en ISO 8601
@@ -146,7 +173,7 @@ function tournamentOut(t, withData) {
 }
 
 const LISTING_FIELDS =['game', 'card_name', 'set_name', 'card_code', 'rarity', 'condition', 'language', 'price',
-  'quantity', 'notes', 'ref_id', 'image_url', 'market_price', 'market_source', 'market_updated'];
+  'quantity', 'notes', 'ref_id', 'image_url', 'market_price', 'market_source', 'market_updated', 'kind', 'category'];
 
 function savePhotos(listingId, photos) {
   db.prepare('DELETE FROM listing_photos WHERE listing_id = ?').run(listingId);
@@ -209,13 +236,15 @@ export const repo = {
 
   async deleteListing(id) { db.prepare('DELETE FROM listings WHERE id = ?').run(Number(id)); },
 
-  // Filtros: { game, condition, q, seller, userId, onlyAvailable, sort }
+  // Filtros: { kind, category, game, condition, set, q, seller, userId, onlyAvailable, sort }
   async listListings(f) {
     const where = [], params = [];
     if (f.onlyAvailable) where.push(`l.status = 'available'`, 'l.quantity > 0');
     if (f.game) { where.push('l.game = ?'); params.push(f.game); }
     if (f.condition) { where.push('l.condition = ?'); params.push(f.condition); }
     if (f.set) { where.push('l.set_name = ? COLLATE NOCASE'); params.push(f.set); }
+    if (f.kind) { where.push('l.kind = ?'); params.push(f.kind); }
+    if (f.category) { where.push('l.category = ?'); params.push(f.category); }
     if (f.userId) { where.push('l.user_id = ?'); params.push(f.userId); }
     if (f.seller) { where.push('u.username = ?'); params.push(f.seller); }
     if (f.q) {
@@ -230,7 +259,7 @@ export const repo = {
 
   async stats() {
     const byGame = db.prepare(`SELECT game, COUNT(*) AS listings, COALESCE(SUM(quantity),0) AS cards
-      FROM listings WHERE status = 'available' AND quantity > 0 GROUP BY game`).all();
+      FROM listings WHERE status = 'available' AND quantity > 0 AND kind = 'card' GROUP BY game`).all();
     const sellers = db.prepare(`SELECT COUNT(DISTINCT user_id) AS n FROM listings WHERE status = 'available' AND quantity > 0`).get().n;
     const users = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
     return { byGame, sellers, users };

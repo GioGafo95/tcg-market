@@ -531,6 +531,34 @@ h2.step:first-of-type { border-top: 0; padding-top: 0; }
 table.mine tr.mine-row td { background: #fff6dc; }
 table.pairings select { min-width: 190px; padding: .4rem .6rem; }
 
+/* ---------- Accesorios ---------- */
+.acc-hero {
+  display: flex; align-items: center; justify-content: space-between; gap: 1.2rem; flex-wrap: wrap;
+  margin-bottom: 1.2rem; padding: clamp(1.2rem, 3vw, 2rem); border-radius: var(--r-lg);
+  background: radial-gradient(600px 220px at 85% 0%, rgba(63, 208, 201, .28), transparent 70%),
+              radial-gradient(500px 220px at 0% 100%, rgba(255, 159, 128, .25), transparent 70%), rgba(255, 255, 255, .05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1);
+}
+.acc-hero h1 { margin: .3rem 0; }
+.acc-hero p { margin: 0; max-width: 560px; }
+.acc-hero .kicker { margin-bottom: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+.chip {
+  padding: .45rem .95rem; border: 0; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  font-family: var(--font-title); font-weight: 600; font-size: .9rem; color: var(--text-soft);
+  background: rgba(255, 255, 255, .07); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .12); transition: all .2s;
+}
+.chip:hover { color: #fff; background: rgba(255, 255, 255, .12); }
+.chip.active { color: #06302e; background: linear-gradient(135deg, #8ff0ea, var(--teal)); box-shadow: 0 8px 18px -8px rgba(63, 208, 201, .9); }
+.panel .chip { color: var(--ink-soft); background: var(--cream-2); box-shadow: none; }
+.panel .chip.active { color: #06302e; background: linear-gradient(135deg, #8ff0ea, var(--teal)); }
+.card.acc .card-img { aspect-ratio: 1 / 1; background: linear-gradient(160deg, #e3fbf9, #cdeff0); }
+.card.acc .placeholder { font-size: 3rem; }
+.detail.acc .gallery-main { aspect-ratio: 1 / 1; }
+.badge.any { background: #dff7f5; color: #0b6b66; }
+.badge.acc-cat { background: #e6f9f8; color: #0b6b66; }
+.acc-filters { grid-template-columns: 1fr 220px; }
+
 /* ---------- Varios ---------- */
 .empty { text-align: center; padding: 3rem 1.2rem; border-radius: var(--r-lg); box-shadow: var(--shadow); font-size: 1.05rem; }
 .empty::before { content: "🐉"; display: block; font-size: 2.8rem; margin-bottom: .5rem; animation: float 4s ease-in-out infinite; }
@@ -599,6 +627,16 @@ table.pairings select { min-width: 190px; padding: .4rem .6rem; }
   .stat { padding: .55rem .4rem; text-align: center; }
   .stat b { display: block; margin: 0; font-size: 1.35rem; }
   .stat span { display: block; font-size: .72rem; line-height: 1.2; }
+
+  /* Accesorios: categorías deslizables en una sola fila */
+  .chips.scroll { flex-wrap: nowrap; overflow-x: auto; margin: 0 -1rem 1rem; padding: 0 1rem .3rem; scrollbar-width: none; }
+  .chips.scroll::-webkit-scrollbar { display: none; }
+  .acc-hero { padding: 1.1rem; }
+  .acc-hero .btn { width: 100%; justify-content: center; }
+  .filters.acc-filters { grid-template-columns: 1fr; }
+  .section-head { flex-wrap: wrap; row-gap: .2rem; }
+  .section-head .tabs { flex-wrap: nowrap; overflow-x: auto; margin-bottom: .2rem; scrollbar-width: none; }
+  .section-head .tabs .tab { flex: none; padding: .42rem .8rem; }
 
   /* Catálogo: dos columnas de cartas */
   .filters { grid-template-columns: 1fr 1fr; gap: .5rem; padding: .5rem; margin-bottom: 1.2rem; }

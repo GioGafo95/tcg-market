@@ -54,7 +54,22 @@ function labelTables(root = $app) {
 }
 new MutationObserver(() => labelTables()).observe($app, { childList: true, subtree: true });
 
-const GAME_LABEL = { pokemon: 'Pokémon', yugioh: 'Yu-Gi-Oh!' };
+const GAME_LABEL = { pokemon: 'Pokémon', yugioh: 'Yu-Gi-Oh!', any: 'Universal' };
+// Accesorios (mismas claves que el servidor)
+const ACC_CATEGORIES = {
+  sleeves: { label: 'Micas y protectores', icon: '🛡️' },
+  deckbox: { label: 'Deck box', icon: '📦' },
+  playmat: { label: 'Tapetes', icon: '🟪' },
+  binder: { label: 'Carpetas', icon: '📒' },
+  toploader: { label: 'Toploaders y estuches', icon: '💎' },
+  dice: { label: 'Dados y marcadores', icon: '🎲' },
+  storage: { label: 'Cajas y organizadores', icon: '🗃️' },
+  other: { label: 'Otros', icon: '✨' },
+};
+const ACC_CONDITIONS = { NEW: 'Nuevo (sellado)', LIKE_NEW: 'Como nuevo', USED: 'Usado' };
+const ACC_GAMES = { any: 'Cualquier juego', pokemon: 'Pokémon', yugioh: 'Yu-Gi-Oh!' };
+const isAcc = (l) => l.kind === 'accessory';
+const condLabel = (l) => (isAcc(l) ? ACC_CONDITIONS[l.condition] || l.condition : l.condition);
 const CONDITIONS = {
   NM: 'Near Mint', LP: 'Lightly Played', MP: 'Moderately Played', HP: 'Heavily Played', DMG: 'Dañada',
 };
@@ -75,6 +90,13 @@ const usd = (n) => `US${new Intl.NumberFormat('en-US', { style: 'currency', curr
 const fxNote = (fx) => (fx ? `tipo de cambio ${fx.rate.toFixed(2)} MXN por dólar (${esc(fx.source)}, ${esc(fx.date || '')})` : '');
 const safeImg = (url) => (/^(https?:\/\/|\/uploads\/)/i.test(url || '') ? url : '');
 const MAX_PHOTOS = 6;
+// Fecha corta (ej. 24/11/2026). Acepta ISO con zona o 'YYYY-MM-DD HH:MM:SS' en UTC sin zona.
+const fmtDay = (v) => {
+  if (!v) return '—';
+  const s = String(v);
+  const d = new Date(/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-MX');
+};
 
 // Botones para llamar o escribir por WhatsApp al vendedor (números de 10 dígitos se toman como de México, +52)
 function contactButtons(contact, cardName) {
@@ -138,13 +160,15 @@ const formData = (form) => Object.fromEntries(new FormData(form).entries());
 
 function renderNav() {
   $nav.innerHTML = currentUser
-    ? `<a class="btn small" href="#/torneos">⚔ Torneos</a>
+    ? `<a class="btn small" href="#/accesorios">🎒 Accesorios</a>
+       <a class="btn small" href="#/torneos">⚔ Torneos</a>
        <a class="btn primary small" href="#/vender">+ Vender carta</a>
-       <a class="btn small" href="#/mis-cartas">Mis cartas</a>
+       <a class="btn small" href="#/mis-cartas">Mis publicaciones</a>
        <a class="btn small" href="#/perfil">Mi perfil</a>
        <span class="nav-user">@${esc(currentUser.username)}</span>
        <button class="btn small" id="logout">Salir</button>`
-    : `<a class="btn small" href="#/torneos">⚔ Torneos</a>
+    : `<a class="btn small" href="#/accesorios">🎒 Accesorios</a>
+       <a class="btn small" href="#/torneos">⚔ Torneos</a>
        <a class="btn small" href="#/login">Iniciar sesión</a>
        <a class="btn primary small" href="#/registro">Crear cuenta</a>`;
   document.getElementById('logout')?.addEventListener('click', async () => {
@@ -155,16 +179,19 @@ function renderNav() {
 
 function cardTile(l, { showSeller = true } = {}) {
   const img = coverImg(l);
+  const acc = isAcc(l);
+  const cat = ACC_CATEGORIES[l.category];
   return `
-    <a class="card" href="#/carta/${l.id}">
+    <a class="card ${acc ? 'acc' : ''}" href="#/carta/${l.id}">
       <div class="card-img">${img ? `<img src="${esc(img)}" alt="${esc(l.card_name)}" loading="lazy">`
-                                  : `<span class="placeholder">✦</span>`}
+                                  : `<span class="placeholder">${acc ? cat?.icon || '✨' : '✦'}</span>`}
         ${l.photo_count ? `<span class="photo-badge" title="Fotos reales del vendedor">📷 ${l.photo_count}</span>` : ''}</div>
       <div class="card-body">
-        <div><span class="badge ${l.game}">${GAME_LABEL[l.game]}</span>
-             <span class="badge cond" title="${esc(CONDITIONS[l.condition])}">${esc(l.condition)}</span></div>
+        <div>${acc ? `<span class="badge acc-cat">${esc(cat?.label || 'Accesorio')}</span>` : ''}
+             <span class="badge ${l.game}">${GAME_LABEL[l.game] || ''}</span>
+             <span class="badge cond" title="${esc(acc ? condLabel(l) : CONDITIONS[l.condition])}">${esc(acc ? condLabel(l) : l.condition)}</span></div>
         <div class="card-name">${esc(l.card_name)}</div>
-        <div class="card-meta">${esc([l.set_name, l.card_code, l.rarity].filter(Boolean).join(' · '))}</div>
+        <div class="card-meta">${esc((acc ? [l.set_name] : [l.set_name, l.card_code, l.rarity]).filter(Boolean).join(' · '))}</div>
         ${showSeller ? `<div class="card-meta">Vende @${esc(l.username)}${l.location ? ' · ' + esc(l.location) : ''}</div>` : ''}
         ${l.market_price_mxn ? `<div class="card-meta">Mercado: ${money(l.market_price_mxn)}</div>` : ''}
         <div class="card-foot"><span class="price">${money(l.price)}</span>
@@ -259,6 +286,59 @@ async function viewCatalog(params) {
   });
 }
 
+// Tienda de accesorios: micas, deck box, tapetes, carpetas… (filtros por categoría, juego, búsqueda y orden)
+async function viewAccessories(params) {
+  const category = params.get('category') || '';
+  const game = params.get('game') || '';
+  const q = params.get('q') || '';
+  const sort = params.get('sort') || '';
+  const { listings } = await api(`/api/listings?${new URLSearchParams({ kind: 'accessory', category, game, q, sort })}`);
+
+  $app.innerHTML = `
+    <div class="acc-hero">
+      <div>
+        <span class="kicker">🎒 Accesorios TCG</span>
+        <h1>La armería del coleccionista</h1>
+        <p class="muted">Micas, deck boxes, tapetes, carpetas y todo lo que protege tus cartas. Compra y vende con otros jugadores de tu zona.</p>
+      </div>
+      <a class="btn primary" href="${currentUser ? '#/vender-accesorio' : '#/registro'}">${currentUser ? '+ Vender accesorio' : 'Crea tu cuenta para vender'}</a>
+    </div>
+    <div class="chips scroll" id="accCats">
+      <button class="chip ${!category ? 'active' : ''}" data-cat="">Todos</button>
+      ${Object.entries(ACC_CATEGORIES).map(([k, c]) => `<button class="chip ${category === k ? 'active' : ''}" data-cat="${k}">${c.icon} ${c.label}</button>`).join('')}
+    </div>
+    <div class="section-head">
+      <div class="tabs">
+        ${[['', 'Todos'], ['pokemon', 'Pokémon'], ['yugioh', 'Yu-Gi-Oh!'], ['any', 'Universal']].map(([v, t]) =>
+          `<button class="tab ${game === v ? 'active' : ''}" data-game="${v}">${t}</button>`).join('')}
+      </div>
+      <span class="muted">${listings.length} ${listings.length === 1 ? 'accesorio' : 'accesorios'}</span>
+    </div>
+    <form class="filters acc-filters" id="filters">
+      <input name="q" type="search" placeholder="Buscar por nombre o marca…" value="${esc(q)}">
+      <select name="sort">
+        ${[['', 'Más recientes'], ['price_asc', 'Precio: menor a mayor'], ['price_desc', 'Precio: mayor a menor'], ['name', 'Nombre A-Z']]
+          .map(([v, t]) => `<option value="${v}" ${sort === v ? 'selected' : ''}>${t}</option>`).join('')}
+      </select>
+    </form>
+    ${listings.length
+      ? `<div class="grid">${listings.map(l => cardTile(l)).join('')}</div>`
+      : `<div class="empty">Todavía no hay accesorios${category ? ` en ${esc(ACC_CATEGORIES[category]?.label || '')}` : ''}.${currentUser
+          ? ' <a href="#/vender-accesorio">¡Publica el primero!</a>' : ' <a href="#/registro">Crea una cuenta</a> para vender.'}</div>`}`;
+
+  const update = (patch) => {
+    const next = new URLSearchParams({ category, game, ...formData(document.getElementById('filters')), ...patch });
+    for (const [k, v] of [...next]) if (!v) next.delete(k);
+    go(`#/accesorios${next.toString() ? `?${next}` : ''}`);
+  };
+  $app.querySelectorAll('#accCats .chip').forEach(b => b.addEventListener('click', () => update({ category: b.dataset.cat })));
+  $app.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => update({ game: b.dataset.game })));
+  const form = document.getElementById('filters');
+  form.addEventListener('submit', e => { e.preventDefault(); update({}); });
+  form.sort.addEventListener('change', () => update({}));
+  form.q.addEventListener('search', () => update({}));
+}
+
 async function viewListing(id) {
   const { listing: l } = await api(`/api/listings/${id}`);
   const mine = currentUser?.id === l.user_id;
@@ -268,12 +348,14 @@ async function viewListing(id) {
     ...(safeImg(l.image_url) ? [{ url: l.image_url, label: 'Imagen oficial de referencia', real: false }] : []),
   ];
   const first = gallery[0];
+  const acc = isAcc(l);
+  const cat = ACC_CATEGORIES[l.category];
   $app.innerHTML = `
-    <p><a href="#/">← Volver al catálogo</a></p>
-    <div class="detail">
+    <p>${acc ? '<a href="#/accesorios">← Volver a accesorios</a>' : '<a href="#/">← Volver al catálogo</a>'}</p>
+    <div class="detail ${acc ? 'acc' : ''}">
       <div>
         <div class="gallery-main">
-          ${first ? `<img id="mainImg" src="${esc(first.url)}" alt="${esc(l.card_name)}">` : `<span class="placeholder">✦</span>`}
+          ${first ? `<img id="mainImg" src="${esc(first.url)}" alt="${esc(l.card_name)}">` : `<span class="placeholder">${acc ? cat?.icon || '✨' : '✦'}</span>`}
           ${first ? `<span class="gallery-label ${first.real ? 'real' : ''}" id="mainLabel">${esc(first.label)}</span>` : ''}
         </div>
         ${gallery.length > 1 ? `<div class="thumbs">${gallery.map((g, i) => `
@@ -281,11 +363,13 @@ async function viewListing(id) {
             <img src="${esc(g.url)}" alt=""><span>${g.real ? '📷' : 'Oficial'}</span>
           </button>`).join('')}</div>` : ''}
         ${l.photos.length ? `<p class="card-meta">📷 ${l.photos.length} foto(s) real(es) subidas por el vendedor.</p>`
+          : acc ? '<p class="card-meta">El vendedor no subió fotos (son opcionales en accesorios de bajo valor); pídeselas si las necesitas.</p>'
           : '<p class="card-meta">Sin fotos reales: en cartas de bajo valor son opcionales. La imagen es la oficial de referencia; pide fotos al vendedor si las necesitas.</p>'}
       </div>
       <div>
-        <span class="badge ${l.game}">${GAME_LABEL[l.game]}</span>
-        ${l.status === 'sold' ? '<span class="badge sold">Vendida</span>' : ''}
+        ${acc ? `<span class="badge acc-cat">${cat?.icon || ''} ${esc(cat?.label || 'Accesorio')}</span>` : ''}
+        <span class="badge ${l.game}">${GAME_LABEL[l.game] || ''}</span>
+        ${l.status === 'sold' ? `<span class="badge sold">${acc ? 'Vendido' : 'Vendida'}</span>` : ''}
         <h1>${esc(l.card_name)}</h1>
         <div class="price" style="font-size:1.8rem">${money(l.price)}</div>
         ${l.market_price_mxn ? `
@@ -294,14 +378,18 @@ async function viewListing(id) {
             <div class="card-meta">${esc(l.market_source)}: ${usd(l.market_price_usd)} (consultado el ${new Date(l.market_updated).toLocaleDateString('es-MX')}),
               convertido con ${fxNote(l.fx)}. Es una referencia, no un precio garantizado.</div>
           </div>` : ''}
-        <dl class="specs">
+        <dl class="specs">${acc ? `
+          <dt>Categoría</dt><dd>${esc(cat?.label || '—')}</dd>
+          <dt>Marca</dt><dd>${esc(l.set_name) || '—'}</dd>
+          <dt>Para</dt><dd>${esc(ACC_GAMES[l.game] || '—')}</dd>
+          <dt>Estado</dt><dd>${esc(condLabel(l))}</dd>` : `
           <dt>Expansión</dt><dd>${esc(l.set_name) || '—'}</dd>
           <dt>Código</dt><dd>${esc(l.card_code) || '—'}</dd>
           <dt>Rareza</dt><dd>${esc(l.rarity) || '—'}</dd>
           <dt>Estado</dt><dd>${esc(l.condition)} — ${esc(CONDITIONS[l.condition])}</dd>
-          <dt>Idioma</dt><dd>${esc(l.language)}</dd>
+          <dt>Idioma</dt><dd>${esc(l.language)}</dd>`}
           <dt>Disponibles</dt><dd>${l.quantity}</dd>
-          <dt>Publicada</dt><dd>${new Date(l.created_at + 'Z').toLocaleDateString('es')}</dd>
+          <dt>Publicada</dt><dd>${fmtDay(l.created_at)}</dd>
         </dl>
         ${l.notes ? `<p>${esc(l.notes).replace(/\n/g, '<br>')}</p>` : ''}
         <div class="panel seller-box">
@@ -328,7 +416,7 @@ async function viewSeller(username) {
   $app.innerHTML = `
     <p><a href="#/">← Volver al catálogo</a></p>
     <h1>${esc(user.display_name)} <span class="muted">@${esc(user.username)}</span></h1>
-    <p class="muted">${user.location ? '📍 ' + esc(user.location) + ' · ' : ''}Miembro desde ${new Date(user.created_at + 'Z').toLocaleDateString('es')}
+    <p class="muted">${user.location ? '📍 ' + esc(user.location) + ' · ' : ''}Miembro desde ${fmtDay(user.created_at)}
       ${user.contact ? ' · Contacto: ' + esc(user.contact) : ''}</p>
     <h2>${listings.length} carta(s) a la venta</h2>
     ${listings.length ? `<div class="grid">${listings.map(l => cardTile(l, { showSeller: false })).join('')}</div>`
@@ -410,19 +498,19 @@ async function viewMine() {
   const { listings } = await api('/api/listings/mine');
   $app.innerHTML = `
     <div class="hero">
-      <div><h1>Mis cartas</h1><p class="muted">Administra las cartas que tienes a la venta.</p></div>
-      <a class="btn primary" href="#/vender">+ Vender carta</a>
+      <div><h1>Mis publicaciones</h1><p class="muted">Administra las cartas y accesorios que tienes a la venta.</p></div>
+      <div class="t-actions"><a class="btn" href="#/vender-accesorio">+ Vender accesorio</a><a class="btn primary" href="#/vender">+ Vender carta</a></div>
     </div>
     ${listings.length ? `
       <div class="panel" style="overflow-x:auto">
         <table class="mine">
-          <thead><tr><th></th><th>Carta</th><th>Juego</th><th>Estado</th><th>Precio</th><th>Cant.</th><th>Publicación</th><th></th></tr></thead>
+          <thead><tr><th></th><th>Publicación</th><th>Juego</th><th>Estado</th><th>Precio</th><th>Cant.</th><th>Publicación</th><th></th></tr></thead>
           <tbody>${listings.map(l => `
             <tr>
               <td>${coverImg(l) ? `<img src="${esc(coverImg(l))}" alt="">` : ''}</td>
-              <td><a href="#/carta/${l.id}">${esc(l.card_name)}</a><div class="card-meta">${esc([l.set_name, l.card_code].filter(Boolean).join(' · '))}</div></td>
-              <td><span class="badge ${l.game}">${GAME_LABEL[l.game]}</span></td>
-              <td>${esc(l.condition)}</td>
+              <td><a href="#/carta/${l.id}">${esc(l.card_name)}</a><div class="card-meta">${isAcc(l) ? `${ACC_CATEGORIES[l.category]?.icon || ''} ${esc(ACC_CATEGORIES[l.category]?.label || 'Accesorio')}${l.set_name ? ' · ' + esc(l.set_name) : ''}` : esc([l.set_name, l.card_code].filter(Boolean).join(' · '))}</div></td>
+              <td><span class="badge ${l.game}">${GAME_LABEL[l.game] || ''}</span></td>
+              <td>${esc(condLabel(l))}</td>
               <td class="price">${money(l.price)}</td>
               <td>${l.quantity}</td>
               <td>${l.status === 'sold' ? '<span class="badge sold">Vendida</span>' : '<span class="badge cond">Disponible</span>'}</td>
@@ -434,7 +522,7 @@ async function viewMine() {
             </tr>`).join('')}
           </tbody>
         </table>
-      </div>` : `<div class="empty">Aún no has publicado cartas. <a href="#/vender">Publica tu primera carta</a>.</div>`}`;
+      </div>` : `<div class="empty">Aún no tienes publicaciones. <a href="#/vender">Vende una carta</a> o <a href="#/vender-accesorio">un accesorio</a>.</div>`}`;
 
   $app.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     if (!confirm('¿Borrar esta publicación? No se puede deshacer.')) return;
@@ -448,13 +536,134 @@ async function viewMine() {
   }));
 }
 
-async function viewListingForm(id) {
+// Selector de fotos reales (formularios de cartas y de accesorios): pinta #photoGrid y usa #photoInput
+function setupPhotos(initial = []) {
+  const keep = initial.map(p => ({ ...p }));
+  const added = []; // data URLs comprimidas en el navegador
+  const input = document.getElementById('photoInput');
+  function render() {
+    const total = keep.length + added.length;
+    document.getElementById('photoGrid').innerHTML = `
+      ${keep.map((p, i) => `<div class="photo"><img src="${esc(p.url)}" alt=""><button type="button" data-keep="${i}" title="Quitar">✕</button></div>`).join('')}
+      ${added.map((p, i) => `<div class="photo"><img src="${p}" alt=""><button type="button" data-new="${i}" title="Quitar">✕</button></div>`).join('')}
+      ${total < MAX_PHOTOS ? `<button type="button" class="photo add" id="addPhoto">＋<span>${total ? 'Añadir otra' : 'Subir fotos'}</span></button>` : ''}`;
+    document.getElementById('addPhoto')?.addEventListener('click', () => input.click());
+    document.querySelectorAll('[data-keep]').forEach(b => b.addEventListener('click', () => { keep.splice(b.dataset.keep, 1); render(); }));
+    document.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', () => { added.splice(b.dataset.new, 1); render(); }));
+  }
+  input.addEventListener('change', async () => {
+    const files = [...input.files].slice(0, MAX_PHOTOS - keep.length - added.length);
+    input.value = '';
+    for (const file of files) {
+      try { added.push(await compressImage(file)); }
+      catch { toast(`No se pudo leer ${file.name}`); }
+    }
+    render();
+  });
+  render();
+  return { count: () => keep.length + added.length, added: () => added, keepIds: () => keep.map(p => p.id) };
+}
+
+// Formulario de accesorio: nombre, categoría, marca, para qué juego, estado, precio y fotos
+function renderAccessoryForm(l, id, fxInfo) {
+  const PHOTO_MIN_USD = fxInfo.photos?.min_usd ?? 2.5;
+  const usdRate = fxInfo.fx?.rate || fxInfo.photos?.fallback_rate || 17;
+  const game = l.game || 'any';
+  $app.innerHTML = `
+    <p><a href="#/accesorios">← Accesorios</a></p>
+    <div class="panel form-wide">
+      <h1>${id ? 'Editar accesorio' : 'Vender un accesorio'}</h1>
+      <form id="f" novalidate>
+        <h2 class="step">1. ¿Qué accesorio vendes?</h2>
+        <div class="field"><label>Categoría</label>
+          <div class="chips" id="catChips">
+            ${Object.entries(ACC_CATEGORIES).map(([k, c]) => `<button type="button" class="chip ${l.category === k ? 'active' : ''}" data-cat="${k}">${c.icon} ${c.label}</button>`).join('')}
+          </div>
+          <input type="hidden" name="category" value="${esc(l.category || '')}">
+        </div>
+        <div class="field"><label>Nombre</label>
+          <input name="card_name" required maxlength="120" value="${esc(l.card_name)}" placeholder="ej. Micas Dragon Shield Matte (100) negras"></div>
+        <div class="row">
+          <div class="field"><label>Marca</label><input name="set_name" maxlength="120" value="${esc(l.set_name)}" placeholder="ej. Ultra Pro, Dragon Shield"></div>
+          <div class="field"><label>Para</label><select name="game">
+            ${Object.entries(ACC_GAMES).map(([k, v]) => `<option value="${k}" ${game === k ? 'selected' : ''}>${v}</option>`).join('')}
+          </select></div>
+        </div>
+
+        <h2 class="step">2. Fotos reales <span class="req" id="photoReq"></span></h2>
+        <p class="card-meta" style="margin-top:-.4rem">Sube hasta ${MAX_PHOTOS} fotos del accesorio (empaque, estado, medidas). <span id="photoRule"></span></p>
+        <div class="photo-grid" id="photoGrid"></div>
+        <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp" multiple hidden>
+
+        <h2 class="step">3. Estado y precio</h2>
+        <div class="row">
+          <div class="field"><label>Estado</label><select name="condition">
+            ${Object.entries(ACC_CONDITIONS).map(([k, v]) => `<option value="${k}" ${(l.condition || 'NEW') === k ? 'selected' : ''}>${v}</option>`).join('')}
+          </select></div>
+          <div class="field"><label>Precio (MXN)</label><input name="price" type="number" inputmode="decimal" min="0" step="0.01" required value="${esc(l.price)}"></div>
+          <div class="field"><label>Cantidad</label><input name="quantity" type="number" inputmode="numeric" min="0" max="999" step="1" required value="${esc(l.quantity ?? 1)}"></div>
+        </div>
+        <div class="field"><label>Notas para el comprador</label><textarea name="notes" rows="3" maxlength="1000" placeholder="Medidas, color, cuántas piezas, envío…">${esc(l.notes)}</textarea></div>
+        <div class="error" id="err"></div>
+        <div class="actions">
+          <button class="btn primary" id="submitBtn">${id ? 'Guardar cambios' : 'Publicar accesorio'}</button>
+          <a class="btn" href="#/accesorios">Cancelar</a>
+        </div>
+      </form>
+    </div>`;
+
+  const f = document.getElementById('f');
+  document.querySelectorAll('#catChips .chip').forEach(b => b.addEventListener('click', () => {
+    f.category.value = b.dataset.cat;
+    document.querySelectorAll('#catChips .chip').forEach(x => x.classList.toggle('active', x === b));
+  }));
+  const photos = setupPhotos(l.photos);
+  const photosNeeded = () => (Number(f.price.value) || 0) / usdRate > PHOTO_MIN_USD;
+  function updatePhotoRule() {
+    const need = photosNeeded();
+    const req = document.getElementById('photoReq');
+    req.textContent = need ? 'obligatorio' : 'opcional';
+    req.classList.toggle('optional', !need);
+    document.getElementById('photoRule').textContent = need
+      ? `Como vale más de US$${PHOTO_MIN_USD.toFixed(2)}, necesitas al menos una foto.`
+      : `Opcionales en accesorios de hasta US$${PHOTO_MIN_USD.toFixed(2)} (unos ${money(Math.round(PHOTO_MIN_USD * usdRate))}).`;
+  }
+  f.price.addEventListener('input', updatePhotoRule);
+  updatePhotoRule();
+
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = document.getElementById('err');
+    const body = { ...formData(f), kind: 'accessory' };
+    if (!body.category) { err.textContent = 'Elige la categoría del accesorio.'; return; }
+    if (!body.card_name.trim()) { err.textContent = 'Escribe el nombre del accesorio.'; return; }
+    if (body.price === '' || Number(body.price) < 0) { err.textContent = 'Indica un precio válido.'; return; }
+    if (photos.count() < 1 && photosNeeded()) { err.textContent = `Vale más de US$${PHOTO_MIN_USD.toFixed(2)}: sube al menos una foto real.`; return; }
+    body.price = Number(body.price); body.quantity = Number(body.quantity);
+    body.new_photos = photos.added();
+    if (id) body.keep_photos = photos.keepIds();
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true; btn.textContent = 'Subiendo…'; err.textContent = '';
+    try {
+      const { listing } = await api(id ? `/api/listings/${id}` : '/api/listings', { method: id ? 'PUT' : 'POST', body });
+      toast(id ? 'Cambios guardados' : '¡Accesorio publicado!'); go(`#/carta/${listing.id}`);
+    } catch (e2) {
+      err.textContent = e2.message;
+      btn.disabled = false; btn.textContent = id ? 'Guardar cambios' : 'Publicar accesorio';
+    }
+  });
+}
+
+async function viewListingForm(id, kind = 'card') {
   if (!requireLogin()) return;
   const [l, fxInfo] = await Promise.all([
-    id ? api(`/api/listings/${id}`).then(r => r.listing) : { game: 'pokemon', condition: 'NM', language: 'Español', quantity: 1, price: '' },
+    id ? api(`/api/listings/${id}`).then(r => r.listing)
+       : kind === 'accessory' ? { game: 'any', condition: 'NEW', quantity: 1, price: '' }
+       : { game: 'pokemon', condition: 'NM', language: 'Español', quantity: 1, price: '' },
     api('/api/fx').catch(() => ({})),
   ]);
   if (id && l.user_id !== currentUser.id) { $app.innerHTML = '<div class="empty">Esta publicación no es tuya.</div>'; return; }
+  if ((id ? l.kind : kind) === 'accessory') return renderAccessoryForm(l, id, fxInfo);
   // Fotos obligatorias solo si la carta vale más de US$2.50 (mercado o precio del vendedor; el servidor lo vuelve a revisar)
   const PHOTO_MIN_USD = fxInfo.photos?.min_usd ?? 2.5;
   const usdRate = fxInfo.fx?.rate || fxInfo.photos?.fallback_rate || 17;
@@ -463,11 +672,8 @@ async function viewListingForm(id) {
   // ref.market_price está en MXN (convertido en el servidor); ref.usd es el valor original de TCGplayer
   let ref = l.ref_id ? { ref_id: l.ref_id, image: l.image_url, market_price: l.market_price_mxn, usd: l.market_price_usd,
                          market_source: l.market_source, fx: l.fx } : null;
-  let keepPhotos = (l.photos || []).map(p => ({ ...p }));
-  let newPhotos = []; // data URLs comprimidas
-
   $app.innerHTML = `
-    <p><a href="#/mis-cartas">← Mis cartas</a></p>
+    <p><a href="#/mis-cartas">← Mis publicaciones</a></p>
     <div class="panel form-wide">
       <h1>${id ? 'Editar carta' : 'Vender una carta'}</h1>
       <form id="f" novalidate>
@@ -627,26 +833,7 @@ async function viewListingForm(id) {
   }));
 
   // --- Fotos reales ---
-  const photoInput = document.getElementById('photoInput');
-  function renderPhotos() {
-    const total = keepPhotos.length + newPhotos.length;
-    document.getElementById('photoGrid').innerHTML = `
-      ${keepPhotos.map((p, i) => `<div class="photo"><img src="${esc(p.url)}" alt=""><button type="button" data-keep="${i}" title="Quitar">✕</button></div>`).join('')}
-      ${newPhotos.map((p, i) => `<div class="photo"><img src="${p}" alt=""><button type="button" data-new="${i}" title="Quitar">✕</button></div>`).join('')}
-      ${total < MAX_PHOTOS ? `<button type="button" class="photo add" id="addPhoto">＋<span>${total ? 'Añadir otra' : 'Subir fotos'}</span></button>` : ''}`;
-    document.getElementById('addPhoto')?.addEventListener('click', () => photoInput.click());
-    document.querySelectorAll('[data-keep]').forEach(b => b.addEventListener('click', () => { keepPhotos.splice(b.dataset.keep, 1); renderPhotos(); }));
-    document.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', () => { newPhotos.splice(b.dataset.new, 1); renderPhotos(); }));
-  }
-  photoInput.addEventListener('change', async () => {
-    const files = [...photoInput.files].slice(0, MAX_PHOTOS - keepPhotos.length - newPhotos.length);
-    photoInput.value = '';
-    for (const file of files) {
-      try { newPhotos.push(await compressImage(file)); }
-      catch { toast(`No se pudo leer ${file.name}`); }
-    }
-    renderPhotos();
-  });
+  const photos = setupPhotos(l.photos);
 
   // ¿Hacen falta fotos? Si la carta vale más de US$2.50 (precio de mercado o el precio que pones)
   function photosNeeded() {
@@ -663,7 +850,6 @@ async function viewListingForm(id) {
       : `Las fotos son opcionales en cartas de hasta US$${PHOTO_MIN_USD.toFixed(2)} (unos ${money(Math.round(PHOTO_MIN_USD * usdRate))}); si no subes, se muestra la imagen oficial.`;
   }
   renderRef();
-  renderPhotos();
   updatePhotoRule();
 
   f.addEventListener('submit', async (e) => {
@@ -671,14 +857,14 @@ async function viewListingForm(id) {
     const err = document.getElementById('err');
     const body = formData(f);
     if (!body.card_name.trim()) { err.textContent = 'Escribe el nombre de la carta.'; return; }
-    if (keepPhotos.length + newPhotos.length < 1 && photosNeeded()) {
+    if (photos.count() < 1 && photosNeeded()) {
       err.textContent = `Esta carta vale más de US$${PHOTO_MIN_USD.toFixed(2)}: sube al menos una foto real de tu carta.`; return;
     }
     if (body.price === '' || Number(body.price) < 0) { err.textContent = 'Indica un precio válido.'; return; }
     body.price = Number(body.price); body.quantity = Number(body.quantity);
     body.ref_id = ref?.ref_id || '';
-    body.new_photos = newPhotos;
-    if (id) body.keep_photos = keepPhotos.map(p => p.id);
+    body.new_photos = photos.added();
+    if (id) body.keep_photos = photos.keepIds();
     const btn = document.getElementById('submitBtn');
     btn.disabled = true; btn.textContent = 'Subiendo…'; err.textContent = '';
     try {
@@ -1122,6 +1308,8 @@ async function router() {
       case 'login': return viewLogin();
       case 'mis-cartas': return await viewMine();
       case 'vender': return await viewListingForm();
+      case 'vender-accesorio': return await viewListingForm(null, 'accessory');
+      case 'accesorios': return await viewAccessories(params);
       case 'editar': return await viewListingForm(parts[1]);
       case 'perfil': return viewProfile();
       case 'torneos': return parts[1] === 'nuevo' ? viewTournamentForm() : parts[1] === 'importar' ? viewTdfImport() : await viewTournaments();

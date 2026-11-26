@@ -71,6 +71,20 @@ const run = async () => {
   await call(`/api/listings/${cheap.data.listing.id}`, { method: 'DELETE', expect: 200 });
   ok('carta de $10 MXN sin foto aceptada; subirle el precio a $500 sin foto, rechazado');
 
+  // Accesorios: categoría obligatoria, juego "any" (universal), no se mezclan con el catálogo de cartas
+  await call('/api/listings', { method: 'POST', expect: 400, body: { kind: 'accessory', card_name: 'Micas', game: 'any', price: 20 } });
+  const acc = await call('/api/listings', { method: 'POST', expect: 201, body: {
+    kind: 'accessory', category: 'sleeves', card_name: `Micas de prueba ${u}`, set_name: 'Dragon Shield', game: 'any', condition: 'NEW', price: 20, quantity: 3 } });
+  const a = acc.data.listing;
+  if (a.kind !== 'accessory' || a.category !== 'sleeves' || a.game !== 'any') throw new Error(`accesorio mal guardado: ${JSON.stringify(a)}`);
+  const accList = await call('/api/listings?kind=accessory&game=pokemon&category=sleeves', { expect: 200 });
+  if (!accList.data.listings.some(x => String(x.id) === String(a.id))) throw new Error('el accesorio universal no aparece al filtrar por Pokémon');
+  const cardsOnly = await call('/api/listings', { expect: 200 });
+  if (cardsOnly.data.listings.some(x => String(x.id) === String(a.id))) throw new Error('un accesorio apareció en el catálogo de cartas');
+  await call(`/api/listings/${a.id}`, { method: 'PUT', expect: 200, body: { ...a, price: 25, keep_photos: [], new_photos: [] } });
+  await call(`/api/listings/${a.id}`, { method: 'DELETE', expect: 200 });
+  ok('accesorio publicado, filtrado (universal incluido en Pokémon), editado y borrado; no aparece entre las cartas');
+
   const lookup = await call('/api/lookup?game=yugioh&q=Dark%20Magician');
   const ref = lookup.status === 200 ? lookup.data.results[0] : null;
   ok(ref ? `búsqueda: ${ref.card_name} ${ref.card_code} ~ $${ref.market_price}` : `búsqueda externa no disponible (${lookup.status}), sigo sin referencia`);

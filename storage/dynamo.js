@@ -192,6 +192,8 @@ export const repo = {
     if (f.game) items = items.filter(l => l.game === f.game);
     if (f.condition) items = items.filter(l => l.condition === f.condition);
     if (f.set) items = items.filter(l => (l.set_name || '').toLowerCase() === f.set.toLowerCase());
+    if (f.kind) items = items.filter(l => (l.kind || 'card') === f.kind);   // las publicaciones antiguas son cartas
+    if (f.category) items = items.filter(l => l.category === f.category);
     if (f.q) {
       const q = f.q.toLowerCase();
       items = items.filter(l => [l.card_name, l.set_name, l.card_code].some(v => (v || '').toLowerCase().includes(q)));
@@ -209,7 +211,7 @@ export const repo = {
   },
 
   async stats() {
-    const listings = (await this.listListings({ onlyAvailable: true })).slice();
+    const listings = (await this.listListings({ onlyAvailable: true, kind: 'card' })).slice();
     const byGameMap = {};
     for (const l of listings) {
       byGameMap[l.game] ??= { game: l.game, listings: 0, cards: 0 };

@@ -39,6 +39,9 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
 - **Buscador de cartas**: páginas con "Ver más", búsqueda por número ("Pikachu 25"), expansión, código de
   Yu-Gi-Oh! ("LOB-EN001") y nombre de Pokémon en español; reintenta y usa TCGdex si pokemontcg.io falla.
 - Perfil público de cada vendedor con su contacto y sus cartas.
+- **Accesorios TCG** (`#/accesorios`): micas, deck boxes, tapetes, carpetas, toploaders, dados y más. Se publican
+  como las cartas (fotos, contacto, editar, marcar vendido) con categoría, marca, estado (nuevo, como nuevo, usado)
+  y para qué juego (Pokémon, Yu-Gi-Oh! o universal). No se mezclan con el catálogo de cartas.
 
 ## Ambiente QA en AWS (serverless)
 
