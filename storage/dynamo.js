@@ -246,6 +246,7 @@ export const repo = {
       del({ PK: `USERNAME#${user.username.toLowerCase()}`, SK: 'UNIQUE' }),
       del({ PK: `EMAIL#${user.email.toLowerCase()}`, SK: 'UNIQUE' }),
       ...(user.pokemon_id ? [del({ PK: `POKEID#${user.pokemon_id}`, SK: 'UNIQUE' })] : []),
+      ...(user.konami_id ? [del({ PK: `KONAMIID#${user.konami_id}`, SK: 'UNIQUE' })] : []),
       { Update: { TableName: TABLE, Key: { PK: 'META', SK: 'COUNTERS' }, UpdateExpression: 'ADD #u :m',
                   ExpressionAttributeNames: { '#u': 'users' }, ExpressionAttributeValues: { ':m': -1 } } },
     ] }));
@@ -346,6 +347,25 @@ export const repo = {
       sellers: new Set(listings.map(l => l.user_id)).size,
       users: meta.Item?.users || 0,
     };
+  },
+
+  // ---------- KONAMI CARD GAME ID (Yu-Gi-Oh!) ----------
+  async setKonamiId(userId, konamiId) {
+    const user = await this.getUser(userId);
+    const old = user?.konami_id || '';
+    if (old === konamiId) return user;
+    const items = [{ Update: { TableName: TABLE, Key: { PK: `USER#${userId}`, SK: 'PROFILE' },
+                               UpdateExpression: 'SET konami_id = :k', ExpressionAttributeValues: { ':k': konamiId } } }];
+    if (konamiId) items.push({ Put: { TableName: TABLE, Item: { PK: `KONAMIID#${konamiId}`, SK: 'UNIQUE', userId }, ConditionExpression: 'attribute_not_exists(PK)' } });
+    if (old) items.push({ Delete: { TableName: TABLE, Key: { PK: `KONAMIID#${old}`, SK: 'UNIQUE' } } });
+    try { await ddb.send(new TransactWriteCommand({ TransactItems: items })); }
+    catch (err) { if (err.name === 'TransactionCanceledException') { const e = new Error('duplicate'); e.code = 'DUPLICATE'; throw e; } throw err; }
+    return this.getUser(userId);
+  },
+  async searchUsers(q, limit = 15) {
+    const s = q.toLowerCase();
+    return (await this.listUsers()).filter(u => !u.blocked && ((u.username || '').toLowerCase().includes(s) || (u.display_name || '').toLowerCase().includes(s)))
+      .sort((a, b) => a.username.localeCompare(b.username)).slice(0, limit);
   },
 
   // ---------- ID de jugador Pokémon (Play! Pokémon) ----------
@@ -456,13 +476,30 @@ export const repo = {
     return new Map([...userIds].map(([pid, uid]) => [pid, users.get(uid)]).filter(([, u]) => u));
   },
 
-  async updateTournament(id, { status, current_round }) {
-    await ddb.send(new UpdateCommand({
-      TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' },
-      UpdateExpression: 'SET #s = :s, current_round = :r', ExpressionAttributeNames: { '#s': 'status' },
-      ExpressionAttributeValues: { ':s': status, ':r': current_round }, ConditionExpression: 'attribute_exists(PK)',
-    }));
+  // Actualiza solo los campos indicados
+  async updateTournament(id, patch) {
+    const allowed = ['status', 'current_round', 'name', 'location', 'starts_at', 'rounds', 'game', 'config', 'phase'];
+    const keys = allowed.filter(k => patch[k] !== undefined);
+    if (keys.length) {
+      const names = Object.fromEntries(keys.map((k, i) => [`#k${i}`, k]));
+      const values = Object.fromEntries(keys.map((k, i) => [`:v${i}`, patch[k]]));
+      if (patch.starts_at !== undefined) { names['#g'] = 'GSI2SK'; values[':g'] = patch.starts_at; }
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: 'META' }, ConditionExpression: 'attribute_exists(PK)',
+        UpdateExpression: 'SET ' + keys.map((k, i) => `#k${i} = :v${i}`).join(', ') + (patch.starts_at !== undefined ? ', #g = :g' : ''),
+        ExpressionAttributeNames: names, ExpressionAttributeValues: values,
+      }));
+    }
     return this.getTournament(id);
+  },
+  async deleteRoundMatches(id, round) {
+    const items = await queryAll({ TableName: TABLE, KeyConditionExpression: 'PK = :p AND begins_with(SK, :s)',
+      ExpressionAttributeValues: { ':p': `TOURNEY#${id}`, ':s': `MATCH#${String(round).padStart(3, '0')}#` }, ProjectionExpression: 'PK, SK' });
+    await Promise.all(items.map(k => ddb.send(new DeleteCommand({ TableName: TABLE, Key: { PK: k.PK, SK: k.SK } }))));
+  },
+  async setPlayerDropped(id, userId, round) {
+    await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { PK: `TOURNEY#${id}`, SK: `PLAYER#${userId}` },
+      UpdateExpression: 'SET dropped = :d', ExpressionAttributeValues: { ':d': round }, ConditionExpression: 'attribute_exists(PK)' }));
   },
 
   async deleteTournament(id) {
@@ -480,8 +517,8 @@ export const repo = {
     return items
       .map(i => {
         const u = users.get(i.user_id) || {};
-        return { user_id: i.user_id, joined_at: i.joined_at, deck: i.deck || '', username: u.username, display_name: u.display_name,
-                 location: u.location, pokemon_id: u.pokemon_id || '' };
+        return { user_id: i.user_id, joined_at: i.joined_at, deck: i.deck || '', dropped: i.dropped || 0, username: u.username,
+                 display_name: u.display_name, location: u.location, pokemon_id: u.pokemon_id || '', konami_id: u.konami_id || '' };
       })
       .sort((a, b) => a.joined_at.localeCompare(b.joined_at));
   },
@@ -524,7 +561,7 @@ export const repo = {
     await Promise.all(matches.map(m => ddb.send(new PutCommand({ TableName: TABLE, Item: {
       PK: `TOURNEY#${id}`, SK: matchSK(m.round, m.table_no), type: 'match',
       tournament_id: id, round: m.round, table_no: m.table_no,
-      player1_id: m.player1_id, player2_id: m.player2_id ?? undefined, result: m.result ?? undefined,
+      player1_id: m.player1_id, player2_id: m.player2_id ?? undefined, result: m.result ?? undefined, topcut: m.topcut ? 1 : undefined,
     } }))));
   },
 

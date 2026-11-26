@@ -1,6 +1,6 @@
 name: Actualizar metajuego (QA)
 
-# Rehace la foto del metajuego (torneos oficiales y online de Limitless) cada 6 horas,
+# Rehace las fotos del metajuego (Pokémon: Limitless; Yu-Gi-Oh!: Omega y YGOPRODeck) cada 6 horas,
 # para que las visitas nunca esperen a Limitless. El endpoint solo actualiza si la foto tiene más de 5 h.
 on:
   schedule:
@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Pedir actualización
-        run: |
-          curl -sS --fail-with-body --max-time 60 -X POST "${{ vars.QA_URL }}/api/meta/refresh"
+      - name: Actualizar Pokémon (Limitless)
+        run: curl -sS --fail-with-body --max-time 60 -X POST "${{ vars.QA_URL }}/api/meta/refresh?part=pokemon"
+      - name: Actualizar Yu-Gi-Oh! (Omega y YGOPRODeck)
+        if: always()
+        run: curl -sS --fail-with-body --max-time 60 -X POST "${{ vars.QA_URL }}/api/meta/refresh?part=yugioh"

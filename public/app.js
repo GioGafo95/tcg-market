@@ -1201,10 +1201,13 @@ function viewProfile() {
     </div>
     <div class="panel auth">
       <h2>⚔ Torneos</h2>
-      <p class="muted">Tu ID de jugador solo lo ven quienes organizan los torneos en los que te inscribes. <a href="#/torneos">Ir a torneos</a></p>
+      <p class="muted">Tus IDs de jugador solo los ven quienes organizan los torneos en los que te inscribes. <a href="#/torneos">Ir a torneos</a></p>
       ${pokemonIdForm(u.pokemon_id || '')}
+      <hr class="soft">
+      ${konamiIdForm(u.konami_id || '')}
     </div>`;
   bindPokemonIdForm(viewProfile);
+  bindKonamiIdForm(viewProfile);
   const f = document.getElementById('f');
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1281,6 +1284,32 @@ function pokemonIdForm(id) {
     </form>`;
 }
 
+function konamiIdForm(id) {
+  return `
+    <form id="kidForm" class="pid-form">
+      <label for="kid">KONAMI CARD GAME ID (Yu-Gi-Oh!)</label>
+      <div class="pid-row">
+        <input id="kid" name="konami_id" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" placeholder="10 dígitos" value="${esc(id)}">
+        <button class="btn primary">${id ? 'Actualizar' : 'Vincular'}</button>
+        ${id ? '<button type="button" class="btn" id="kidUnlink">Desvincular</button>' : ''}
+      </div>
+      <div class="card-meta">Tu CARD GAME ID de 10 dígitos (antes COSSY ID; lo ves en la app NEURON vinculada a tu KONAMI ID). Lo necesitas para torneos de Yu-Gi-Oh!.</div>
+      <div class="error" id="kidErr"></div>
+    </form>`;
+}
+function bindKonamiIdForm(after) {
+  const f = document.getElementById('kidForm');
+  if (!f) return;
+  const save = async (value) => {
+    try {
+      ({ user: currentUser } = await api('/api/auth/me/konami-id', { method: 'PUT', body: { konami_id: value } }));
+      toast(value ? 'CARD GAME ID vinculado' : 'CARD GAME ID desvinculado'); after();
+    } catch (err) { document.getElementById('kidErr').textContent = err.message; }
+  };
+  f.addEventListener('submit', e => { e.preventDefault(); save(f.konami_id.value.trim()); });
+  document.getElementById('kidUnlink')?.addEventListener('click', () => save(''));
+}
+
 function bindPokemonIdForm(after) {
   const f = document.getElementById('pidForm');
   if (!f) return;
@@ -1297,7 +1326,8 @@ function bindPokemonIdForm(after) {
 function tournamentTile(t) {
   return `
     <a class="t-tile" href="#/torneo/${t.id}">
-      <span><span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status === 'running' ? ` · ronda ${t.current_round}` : ''}</span>
+      <span><span class="badge ${t.game === 'yugioh' ? 'yugioh' : 'pokemon'}">${t.game === 'yugioh' ? 'Yu-Gi-Oh!' : 'Pokémon'}</span>
+        <span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status === 'running' ? ` · ronda ${t.current_round}${t.phase === 'top' ? ' (top cut)' : ''}` : ''}</span>
         ${t.source === 'tdf' ? '<span class="badge t-tom" title="Importado del archivo oficial de TOM">TOM</span>' : ''}</span>
       <div class="card-name">${esc(t.name)}</div>
       <div class="card-meta">📅 ${fmtDate(t.starts_at)}</div>
@@ -1317,7 +1347,7 @@ async function viewTournaments() {
   const o = me?.overall;
 
   $app.innerHTML = `
-    ${compNav('torneos')}
+    ${compNav('locales')}
     <div class="t-hero">
       ${emblemSVG()}
       <div>
@@ -1367,29 +1397,74 @@ async function viewTournaments() {
   bindPokemonIdForm(viewTournaments);
 }
 
+// Campos de configuración (crear y editar)
+function tournamentFields(t = {}) {
+  const c = t.config || {};
+  const game = t.game || 'pokemon';
+  const top = c.top_cut ?? 'auto';
+  return `
+    <div class="field"><label>Juego</label>
+      <div class="segmented" id="tGame">${[['pokemon', 'Pokémon'], ['yugioh', 'Yu-Gi-Oh!']].map(([k, n]) => `<button type="button" data-game="${k}" class="${game === k ? 'active' : ''}">${n}</button>`).join('')}</div>
+      <input type="hidden" name="game" value="${esc(game)}">
+      <p class="card-meta" id="rulesHint">${game === 'yugioh' ? 'Reglas KONAMI (como KTS): V 3 / D 0, sin empates (tiempo = doble derrota), desempate AABBBCCCDDD.' : 'Reglas Play! Pokémon (como TOM): V 3 / E 1 / D 0, desempates % de rivales (mín. 25 %) y % de rivales de rivales.'}</p></div>
+    <div class="field"><label>Nombre</label><input name="name" required minlength="3" maxlength="80" value="${esc(t.name || '')}" placeholder="ej. Liga de la Tienda · Noviembre"></div>
+    <div class="field"><label>Lugar</label><input name="location" maxlength="80" value="${esc(t.location || '')}" placeholder="ej. Tienda Dragón, Col. Roma"></div>
+    <div class="row">
+      <div class="field"><label>Fecha y hora</label><input name="starts_at" type="datetime-local" required value="${esc(t.starts_at || '')}"></div>
+      <div class="field"><label>Rondas de suizo</label><select name="rounds">
+        <option value="0" ${!t.rounds ? 'selected' : ''}>Automático (según jugadores)</option>
+        ${[...Array(15).keys()].map(i => `<option value="${i + 1}" ${t.rounds === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Top cut</label><select name="top_cut">
+        ${[['auto', 'Automático (tabla oficial)'], ['0', 'Sin top cut'], ['2', 'Top 2'], ['4', 'Top 4'], ['8', 'Top 8'], ['16', 'Top 16'], ['32', 'Top 32']]
+          .map(([v, n]) => `<option value="${v}" ${String(top) === v ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div class="field"><label>Formato de partida</label><select name="best_of">
+        <option value="3" ${c.best_of !== 1 ? 'selected' : ''}>Mejor de 3</option><option value="1" ${c.best_of === 1 ? 'selected' : ''}>A 1 juego</option></select></div>
+      <div class="field"><label>Minutos por ronda</label><input name="round_minutes" type="number" min="10" max="120" value="${esc(c.round_minutes || 50)}"></div>
+    </div>
+    <label class="switch"><input type="checkbox" name="open_registration" ${c.open_registration !== false ? 'checked' : ''}><span class="switch-ui"></span>
+      <span><b>Inscripción abierta</b><small>Los jugadores se inscriben solos. Si la apagas, solo tú agregas jugadores registrados.</small></span></label>
+    <label class="switch"><input type="checkbox" name="require_id" ${c.require_id !== false ? 'checked' : ''}><span class="switch-ui"></span>
+      <span><b>Pedir ID oficial</b><small>Play! Pokémon ID o KONAMI CARD GAME ID vinculado en el perfil (recomendado para torneos oficiales).</small></span></label>`;
+}
+function tournamentBody(f) {
+  const d = formData(f);
+  return { name: d.name, location: d.location, starts_at: d.starts_at, game: d.game, rounds: Number(d.rounds) || 0,
+    config: { top_cut: d.top_cut, best_of: Number(d.best_of), round_minutes: Number(d.round_minutes),
+              open_registration: !!f.open_registration.checked, require_id: !!f.require_id.checked } };
+}
+function bindTournamentFields(f) {
+  f.querySelector('#tGame').addEventListener('click', e => {
+    const b = e.target.closest('[data-game]'); if (!b) return;
+    f.game.value = b.dataset.game;
+    f.querySelectorAll('#tGame button').forEach(x => x.classList.toggle('active', x === b));
+    f.querySelector('#rulesHint').textContent = b.dataset.game === 'yugioh'
+      ? 'Reglas KONAMI (como KTS): V 3 / D 0, sin empates (tiempo = doble derrota), desempate AABBBCCCDDD.'
+      : 'Reglas Play! Pokémon (como TOM): V 3 / E 1 / D 0, desempates % de rivales (mín. 25 %) y % de rivales de rivales.';
+  });
+}
+
 function viewTournamentForm() {
   if (!requireLogin()) return;
   $app.innerHTML = `
+    ${compNav('locales')}
     <p><a href="#/torneos">← Torneos</a></p>
-    <div class="panel auth">
+    <div class="panel form-wide">
       <h1>Organizar torneo</h1>
-      <p class="muted">Crea el torneo, comparte el enlace con los jugadores y genera las rondas el día del evento.</p>
-      <form id="f">
-        <div class="field"><label>Nombre</label><input name="name" required minlength="3" maxlength="80" placeholder="ej. Liga de la Tienda · Noviembre"></div>
-        <div class="field"><label>Lugar</label><input name="location" maxlength="80" placeholder="ej. Tienda Dragón, Col. Roma"></div>
-        <div class="row">
-          <div class="field"><label>Fecha y hora</label><input name="starts_at" type="datetime-local" required></div>
-          <div class="field"><label>Rondas (0 = libre)</label><input name="rounds" type="number" min="0" max="15" value="0"></div>
-        </div>
+      <p class="muted">Suizo con las reglas oficiales de cada juego. Las rondas y el top cut se calculan solos según los jugadores (puedes cambiarlos).</p>
+      <form id="f" class="t-form">
+        ${tournamentFields()}
         <div class="error" id="err"></div>
         <button class="btn primary">Crear torneo</button>
       </form>
     </div>`;
   const f = document.getElementById('f');
+  bindTournamentFields(f);
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      const { tournament } = await api('/api/tournaments', { method: 'POST', body: formData(f) });
+      const { tournament } = await api('/api/tournaments', { method: 'POST', body: tournamentBody(f) });
       toast('¡Torneo creado!'); go(`#/torneo/${tournament.id}`);
     } catch (err) { document.getElementById('err').textContent = err.message; }
   });
@@ -1408,25 +1483,28 @@ async function viewTournament(id) {
   // Ronda en curso de cada categoría (en un TDF cada categoría numera sus rondas)
   const lastRound = {};
   for (const r of d.rounds) lastRound[r.category || ''] = Math.max(lastRound[r.category || ''] || 0, r.round);
+  const r_isTop = (round) => d.rounds.some(r => r.round === round && r.topcut);
   const resultCell = (m, round) => {
     if (m.bye) return '<span class="badge cond">Bye</span>';
-    if (!isTdf && d.can_manage && t.status === 'running' && round === t.current_round) {
-      return `<select data-res="${round}/${m.table_no}">
-        ${[['', 'Pendiente'], ['p1', `Gana ${m.player1.display_name}`], ['p2', `Gana ${m.player2.display_name}`], ['tie', 'Empate']]
-          .map(([v, txt]) => `<option value="${v}" ${(m.result || '') === v ? 'selected' : ''}>${esc(txt)}</option>`).join('')}
+    if (!isTdf && d.can_manage && t.status !== 'registration') {
+      const opts = [['', 'Pendiente'], ['p1', `Gana ${m.player1.display_name}`], ['p2', `Gana ${m.player2.display_name}`],
+        ...(r_isTop(round) ? [] : [...(d.rules?.ties ? [['tie', 'Empate']] : []), ['dl', 'Doble derrota']])];
+      return `<select data-res="${round}/${m.table_no}" class="${m.result ? 'done' : ''}">
+        ${opts.map(([v, txt]) => `<option value="${v}" ${(m.result || '') === v ? 'selected' : ''}>${esc(txt)}</option>`).join('')}
       </select>`;
     }
     if (!m.result) return '<span class="muted">En juego</span>';
-    return m.result === 'tie' ? 'Empate' : `Gana ${esc((m.result === 'p1' ? m.player1 : m.player2)?.display_name)}`;
+    return m.result === 'tie' ? 'Empate' : m.result === 'dl' ? 'Doble derrota' : `Gana ${esc((m.result === 'p1' ? m.player1 : m.player2)?.display_name)}`;
   };
 
   $app.innerHTML = `
-    ${compNav('torneos')}
+    ${compNav('locales')}
     <p><a href="#/torneos">← Torneos</a></p>
     <div class="t-hero">
       ${emblemSVG()}
       <div>
-        <span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status !== 'registration' && !isTdf ? ` · ronda ${t.current_round}${t.rounds ? ` de ${t.rounds}` : ''}` : ''}</span>
+        ${!isTdf ? `<span class="badge ${d.rules?.game || 'pokemon'}">${d.rules?.game === 'yugioh' ? 'Yu-Gi-Oh!' : 'Pokémon'}</span>` : ''}
+        <span class="badge t-${t.status}">${T_STATUS[t.status]}${t.status !== 'registration' && !isTdf ? (t.phase === 'top' ? ' · top cut' : ` · ronda ${t.current_round}${t.rounds ? ` de ${t.rounds}` : ''}`) : ''}</span>
         ${isTdf ? `<span class="badge t-tom">Importado de TOM</span> ${(t.categories || []).map(c => `<span class="badge cond">${esc(c)}</span>`).join(' ')}` : ''}
         <h1>${esc(t.name)}</h1>
         <p class="muted">📅 ${fmtDate(t.starts_at)}${t.location ? ` · 📍 ${esc(t.location)}` : ''} · 👥 ${t.player_count} jugador(es) ·
@@ -1434,15 +1512,16 @@ async function viewTournament(id) {
       </div>
       <div class="t-actions">
         ${t.status === 'registration' && currentUser
-          ? (me.joined ? '<button class="btn" id="leave">Salir del torneo</button>' : '<button class="btn primary" id="join">Inscribirme</button>')
+          ? (me.joined ? '<button class="btn" id="leave">Salir del torneo</button>' : d.tournament.config?.open_registration === false ? '<span class="badge cond">El organizador agrega a los jugadores</span>' : '<button class="btn primary" id="join">Inscribirme</button>')
           : ''}
         ${!currentUser && t.status === 'registration' ? '<a class="btn primary" href="#/login">Inicia sesión para inscribirte</a>' : ''}
       </div>
     </div>
     <div class="error" id="err"></div>
 
-    ${currentUser && !currentUser.pokemon_id && t.status === 'registration' && !me.joined
-      ? `<div class="panel">${pokemonIdForm('')}</div>` : ''}
+    ${currentUser && !isTdf && t.status === 'registration' && !me.joined && d.tournament.config?.require_id !== false
+      && !(d.rules?.game === 'yugioh' ? currentUser.konami_id : currentUser.pokemon_id)
+      ? `<div class="panel">${d.rules?.game === 'yugioh' ? konamiIdForm('') : pokemonIdForm('')}</div>` : ''}
 
     ${me.joined ? `
       ${me.match ? vsCard(me.match) : ''}
@@ -1476,19 +1555,7 @@ async function viewTournament(id) {
         </div>
       </div>` : ''}
 
-    ${d.can_manage && !isTdf ? `
-      <div class="panel organizer">
-        <h2>Panel de organizador</h2>
-        <p class="muted">${t.status === 'registration' ? 'Cuando estén todos, genera la ronda 1: se cierran las inscripciones y se emparejan al azar.'
-          : t.status === 'running' ? 'Captura los resultados de la ronda; cuando estén completos genera la siguiente (emparejamiento suizo por puntos, sin revanchas).'
-          : 'Torneo terminado.'}</p>
-        <div class="t-actions">
-          ${t.status !== 'finished' && !(t.rounds && t.current_round >= t.rounds)
-            ? `<button class="btn primary" id="nextRound" ${t.status === 'running' && !d.round_complete ? 'disabled' : ''}>${t.status === 'registration' ? 'Empezar · generar ronda 1' : `Generar ronda ${t.current_round + 1}`}</button>` : ''}
-          ${t.status === 'running' ? `<button class="btn" id="finish" ${d.round_complete ? '' : 'disabled'}>Finalizar torneo</button>` : ''}
-          ${t.status === 'registration' ? '<button class="btn danger" id="del">Borrar torneo</button>' : ''}
-        </div>
-      </div>` : ''}
+    ${d.can_manage && !isTdf ? organizerPanel(d) : ''}
 
     ${d.rounds.length ? [...d.rounds].reverse().map(r => `
       <h2>${esc(r.label || `Ronda ${r.round}`)}${multiCat ? ` · ${esc(r.category)}` : ''}${r.round === lastRound[r.category || ''] && t.status === 'running' ? ' <span class="badge t-running">en curso</span>' : ''}</h2>
@@ -1503,17 +1570,18 @@ async function viewTournament(id) {
       <h2>Clasificación</h2>
       <div class="panel" style="overflow-x:auto">
         ${isTdf ? '<p class="card-meta">Lugar oficial calculado por TOM. Récord con top cut incluido; puntos y % de rivales solo del suizo.</p>' : ''}
-        <table class="mine"><thead><tr><th>#</th><th>Jugador</th>${multiCat ? '<th>Categoría</th>' : ''}<th>Récord</th><th>Puntos</th><th>% rivales</th></tr></thead>
-        <tbody>${d.standings.map(s => `<tr class="${isMe(s) ? 'mine-row' : ''}">
-          <td>${s.place}${s.place === 1 && t.status === 'finished' ? ' 👑' : ''}</td><td>${nameOf(s)}</td>${multiCat ? `<td>${esc(s.category)}</td>` : ''}
-          <td>${record(s)}</td><td><b>${s.points}</b></td><td>${s.opp_win_pct}%</td></tr>`).join('')}</tbody></table>
+        ${!isTdf ? `<p class="card-meta">${d.rules.game === 'yugioh' ? 'Desempate KTS: puntos · % de victorias de rivales (OMW) · % de los rivales de rivales (OOMW) · suma de cuadrados de rondas perdidas. Número KTS = AABBBCCCDDD.' : 'Desempates Play! Pokémon: puntos · % de victorias de rivales (mín. 25 %) · % de rivales de rivales · enfrentamiento directo.'}${d.tournament.phase === 'top' || d.rounds.some(r => r.topcut) ? ' Los primeros lugares salen del top cut.' : ''}</p>` : ''}
+        <table class="mine"><thead><tr><th>#</th><th>Jugador</th>${multiCat ? '<th>Categoría</th>' : ''}<th>Récord</th><th>Puntos</th><th>${d.rules?.game === 'yugioh' ? 'OMW' : '% rivales'}</th>${!isTdf ? `<th>${d.rules?.game === 'yugioh' ? 'OOMW' : '% riv. de riv.'}</th>` : ''}${d.rules?.game === 'yugioh' ? '<th>KTS</th>' : ''}</tr></thead>
+        <tbody>${d.standings.map(s => `<tr class="${isMe(s) ? 'mine-row' : ''}${s.dropped ? ' dropped' : ''}">
+          <td>${s.place}${s.place === 1 && t.status === 'finished' ? ' 👑' : ''}</td><td>${nameOf(s)}${s.dropped ? ` <span class="badge cond">Retirado R${s.dropped}</span>` : ''}</td>${multiCat ? `<td>${esc(s.category)}</td>` : ''}
+          <td>${record(s)}</td><td><b>${s.points}</b></td><td>${s.opp_win_pct}%</td>${!isTdf ? `<td>${s.oopp_win_pct ?? '—'}%</td>` : ''}${d.rules?.game === 'yugioh' ? `<td class="mono">${esc(s.kts || '')}</td>` : ''}</tr>`).join('')}</tbody></table>
       </div>` : ''}
 
     <h2>${isTdf ? 'Jugadores' : 'Jugadores inscritos'} (${d.players.length})</h2>
     ${isTdf ? '<p class="muted">Los jugadores con cuenta en la app aparecen con su usuario; los demás, con nombre e inicial del apellido.</p>' : ''}
     ${d.players.length ? `<div class="panel" style="overflow-x:auto">
-      <table class="mine"><thead><tr><th>Jugador</th>${isTdf ? '<th>Categoría</th>' : '<th>Zona</th><th>Deck</th>'}${d.can_manage ? '<th>ID Pokémon</th>' : ''}</tr></thead>
-      <tbody>${d.players.map(p => `<tr class="${isMe(p) ? 'mine-row' : ''}"><td>${nameOf(p)}</td><td>${esc((isTdf ? p.category : p.location) || '—')}</td>${isTdf ? '' : `<td>${esc(p.deck || '—')}</td>`}${d.can_manage ? `<td>${esc(p.pokemon_id || '—')}</td>` : ''}</tr>`).join('')}</tbody></table>
+      <table class="mine"><thead><tr><th>Jugador</th>${isTdf ? '<th>Categoría</th>' : '<th>Zona</th><th>Deck</th>'}${d.can_manage ? `<th>${d.rules?.game === 'yugioh' ? 'CARD GAME ID' : 'ID Pokémon'}</th>` : ''}${d.can_manage && !isTdf ? '<th></th>' : ''}</tr></thead>
+      <tbody>${d.players.map(p => `<tr class="${isMe(p) ? 'mine-row' : ''}${p.dropped ? ' dropped' : ''}"><td>${nameOf(p)}${p.dropped ? ` <span class="badge cond">Retirado R${p.dropped}</span>` : ''}</td><td>${esc((isTdf ? p.category : p.location) || '—')}</td>${isTdf ? '' : `<td>${esc(p.deck || '—')}</td>`}${d.can_manage ? `<td class="mono">${esc((d.rules?.game === 'yugioh' ? p.konami_id : p.pokemon_id) || '—')}</td>` : ''}${d.can_manage && !isTdf ? `<td class="actions">${t.status === 'registration' ? `<button class="btn small" data-rm="${esc(p.user_id)}">Quitar</button>` : p.dropped ? `<button class="btn small" data-undrop="${esc(p.user_id)}">Reactivar</button>` : t.status === 'running' ? `<button class="btn small" data-drop="${esc(p.user_id)}">Dar de baja</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody></table>
     </div>` : '<p class="muted">Todavía no hay jugadores inscritos.</p>'}`;
 
   const reload = () => viewTournament(id);
@@ -1539,7 +1607,7 @@ async function viewTournament(id) {
     await api(`/api/tournaments/${id}/finish`, { method: 'POST' }); toast('Torneo finalizado'); reload();
   });
   act('del', async () => {
-    const msg = isTdf ? '¿Quitar este torneo importado? Podrás volver a importarlo con el TDF.' : '¿Borrar este torneo? No se puede deshacer.';
+    const msg = isTdf ? '¿Quitar este torneo importado? Podrás volver a importarlo con el TDF.' : '¿Borrar este torneo con todas sus rondas y resultados? No se puede deshacer.';
     if (!confirm(msg)) { document.getElementById('del').disabled = false; return; }
     await api(`/api/tournaments/${id}`, { method: 'DELETE' }); toast(isTdf ? 'Torneo quitado' : 'Torneo borrado'); go('#/torneos');
   });
@@ -1559,6 +1627,108 @@ async function viewTournament(id) {
     } catch (err) { document.getElementById('err').textContent = err.message; }
   }));
   bindPokemonIdForm(reload);
+  bindKonamiIdForm(reload);
+  if (d.can_manage && !isTdf) bindOrganizer(d, id, reload);
+}
+
+// ---------- Panel de organizador (torneos de la app) ----------
+function organizerPanel(d) {
+  const t = d.tournament, R = d.rules;
+  const swissDone = t.rounds && t.current_round >= t.rounds && t.phase !== 'top';
+  const curPlayers = t.current_round ? (d.rounds.find(r => r.round === t.current_round)?.matches || [])
+    .flatMap(m => [m.player1, m.player2]).filter(Boolean) : [];
+  const topRound = d.rounds.filter(r => r.topcut).slice(-1)[0];
+  const topDone = topRound && topRound.matches.length === 1 && topRound.matches[0].result;
+  return `
+    <div class="panel organizer">
+      <div class="panel-title"><h2>🛠️ Panel de organizador</h2><span class="badge ${R.game}">${esc(R.label)}</span></div>
+      <div class="org-stats">
+        <div><span>Jugadores activos</span><b>${d.players.filter(p => !p.dropped).length}</b></div>
+        <div><span>Rondas de suizo</span><b>${t.current_round && t.phase !== 'top' ? `${t.current_round} / ` : ''}${R.rounds || '—'}</b><small>${t.rounds ? 'fijadas' : `automático: ${R.recommended.rounds || '—'}`}</small></div>
+        <div><span>Top cut</span><b>${R.top_cut ? `Top ${R.top_cut}` : 'Ninguno'}</b><small>${t.config?.top_cut === 'auto' || t.config?.top_cut === undefined ? 'según la tabla oficial' : 'elegido'}</small></div>
+        <div><span>Partidas</span><b>${t.config?.best_of === 1 ? 'A 1 juego' : 'Mejor de 3'}</b><small>${t.config?.round_minutes || 50} min por ronda</small></div>
+      </div>
+      <p class="muted">${t.status === 'registration' ? 'Agrega o espera a los jugadores. Al generar la ronda 1 se cierran las inscripciones y se emparejan al azar.'
+        : t.phase === 'top' ? 'Top cut en curso: captura al ganador de cada partida y genera la siguiente ronda hasta la final.'
+        : t.status === 'running' ? (swissDone ? `Terminó el suizo. ${R.top_cut ? `Inicia el top ${R.top_cut} o finaliza el torneo.` : 'Ya puedes finalizar el torneo.'}`
+          : 'Captura los resultados; cuando estén completos genera la siguiente ronda (suizo por puntos, sin revanchas).')
+        : 'Torneo terminado. Puedes reabrirlo para corregir algo.'}</p>
+      <div class="t-actions">
+        ${t.status !== 'finished' && !swissDone && !(t.phase === 'top' && topDone)
+          ? `<button class="btn primary" id="nextRound" ${t.status === 'running' && !d.round_complete ? 'disabled' : ''}>${t.status === 'registration' ? 'Empezar · generar ronda 1' : t.phase === 'top' ? 'Siguiente ronda del top cut' : `Generar ronda ${t.current_round + 1}`}</button>` : ''}
+        ${t.status === 'running' && swissDone && R.top_cut ? `<button class="btn primary" id="startTop" ${d.round_complete ? '' : 'disabled'}>Iniciar top ${R.top_cut}</button>` : ''}
+        ${t.status === 'running' ? `<button class="btn" id="finish" ${d.round_complete ? '' : 'disabled'}>Finalizar torneo</button>` : ''}
+        ${t.status === 'finished' ? '<button class="btn" id="reopen">Reabrir torneo</button>' : ''}
+      </div>
+      ${t.current_round ? `
+      <details class="manual org-tools"><summary>🔧 Corregir la ronda ${t.current_round}</summary>
+        <div class="t-actions">
+          ${t.phase !== 'top' ? '<button class="btn small" id="repair">Rehacer emparejamientos</button>' : ''}
+          <button class="btn small danger" id="undoRound">Deshacer ronda ${t.current_round}</button>
+        </div>
+        <p class="card-meta">Rehacer vuelve a emparejar la ronda actual (borra sus resultados). Deshacer la quita por completo y regresa a la ronda anterior.</p>
+        ${curPlayers.length > 2 ? `<div class="swap-row"><label>Intercambiar de lugar a</label>
+          <select id="swapA">${curPlayers.map(p => `<option value="${esc(p.user_id)}">${esc(p.display_name)}</option>`).join('')}</select>
+          <span>con</span><select id="swapB">${curPlayers.map((p, i) => `<option value="${esc(p.user_id)}" ${i === 1 ? 'selected' : ''}>${esc(p.display_name)}</option>`).join('')}</select>
+          <button class="btn small" id="swap">Intercambiar</button></div>` : ''}
+        <p class="card-meta">También puedes corregir el resultado de cualquier ronda directamente en su tabla; la clasificación se recalcula sola.</p>
+      </details>` : ''}
+      ${t.status !== 'finished' ? `
+      <div class="add-player">
+        <label>➕ Agregar jugador registrado${t.status === 'running' ? ' (entra desde la siguiente ronda)' : ''}</label>
+        <div class="search-row"><input id="playerSearch" type="search" placeholder="Busca por usuario o nombre…" autocomplete="off"></div>
+        <div id="playerResults" class="player-results"></div>
+      </div>` : ''}
+      <details class="manual org-tools"><summary>⚙️ Configuración del torneo</summary>
+        <form id="tEdit" class="t-form">${tournamentFields({ ...t, starts_at: String(t.starts_at).slice(0, 16) })}
+          <div class="t-actions"><button class="btn primary small">Guardar cambios</button><button type="button" class="btn small danger" id="del">Borrar torneo</button></div>
+        </form>
+      </details>
+    </div>`;
+}
+
+function bindOrganizer(d, id, reload) {
+  const call = async (path, opts, msg) => {
+    try { await api(`/api/tournaments/${id}${path}`, opts); toast(msg); reload(); }
+    catch (err) { document.getElementById('err').textContent = err.message; toast(err.message); }
+  };
+  const on = (elId, fn) => document.getElementById(elId)?.addEventListener('click', fn);
+  on('startTop', () => call('/topcut', { method: 'POST', body: {} }, `Top ${d.rules.top_cut} emparejado`));
+  on('reopen', () => call('/reopen', { method: 'POST' }, 'Torneo reabierto'));
+  on('repair', () => confirm('¿Rehacer los emparejamientos de la ronda actual? Se borran sus resultados.') && call('/rounds/current/repair', { method: 'POST' }, 'Ronda emparejada de nuevo'));
+  on('undoRound', () => confirm(`¿Deshacer la ronda ${d.tournament.current_round}? Se borran sus emparejamientos y resultados.`) && call('/rounds/current', { method: 'DELETE' }, 'Ronda deshecha'));
+  on('swap', () => call('/rounds/current/swap', { method: 'POST', body: { a: document.getElementById('swapA').value, b: document.getElementById('swapB').value } }, 'Jugadores intercambiados'));
+  $app.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => confirm('¿Quitar a este jugador del torneo?') && call(`/players/${b.dataset.rm}`, { method: 'DELETE' }, 'Jugador quitado')));
+  $app.querySelectorAll('[data-drop]').forEach(b => b.addEventListener('click', () => confirm('¿Dar de baja a este jugador? Ya no se le empareja; su récord se conserva.') && call(`/players/${b.dataset.drop}`, { method: 'DELETE' }, 'Jugador dado de baja')));
+  $app.querySelectorAll('[data-undrop]').forEach(b => b.addEventListener('click', () => call(`/players/${b.dataset.undrop}?undo=1`, { method: 'DELETE' }, 'Jugador reactivado')));
+
+  // Buscar y agregar jugadores registrados
+  const input = document.getElementById('playerSearch'), out = document.getElementById('playerResults');
+  let timer;
+  input?.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { out.innerHTML = ''; return; }
+    timer = setTimeout(async () => {
+      const { users } = await api(`/api/users-search?q=${encodeURIComponent(q)}`);
+      const inT = new Set(d.players.map(p => String(p.user_id)));
+      const needId = d.tournament.config?.require_id !== false;
+      out.innerHTML = users.map(u => {
+        const has = d.rules.game === 'yugioh' ? u.has_konami_id : u.has_pokemon_id;
+        return `<div class="pr-row"><span><b>${esc(u.display_name)}</b> <span class="muted">@${esc(u.username)}${u.location ? ' · ' + esc(u.location) : ''}</span>
+          ${has ? '<span class="badge legal">ID vinculado</span>' : '<span class="badge cond">Sin ID</span>'}</span>
+          ${inT.has(String(u.id)) ? '<span class="card-meta">Ya inscrito</span>' : `<button class="btn small" data-add="${esc(u.id)}" ${needId && !has ? 'title="Necesita vincular su ID"' : ''}>Agregar</button>`}</div>`;
+      }).join('') || '<p class="card-meta">Sin coincidencias. El jugador debe tener cuenta en Macai TCG.</p>';
+      out.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => call('/players', { method: 'POST', body: { user_id: b.dataset.add } }, 'Jugador agregado')));
+    }, 250);
+  });
+
+  // Configuración
+  const f = document.getElementById('tEdit');
+  if (f) {
+    bindTournamentFields(f);
+    f.addEventListener('submit', e => { e.preventDefault(); call('', { method: 'PUT', body: tournamentBody(f) }, 'Configuración guardada'); });
+  }
 }
 
 // Lee el archivo TDF en el navegador y lo manda al servidor (que lo valida y lo interpreta)
@@ -1991,12 +2161,22 @@ async function loadMeta() {
   return metaCache;
 }
 
-function compNav(active) {
-  const tabs = [
-    ['meta', '#/competitivo', '📊 Metajuego'], ['oficiales', '#/competitivo/oficiales', '🏟️ Oficiales'],
-    ['online', '#/competitivo/online', '🌐 Online'], ['torneos', '#/torneos', '⚔️ Torneos locales'], ['partidas', '#/partidas', '📝 Mis partidas'],
-  ];
-  return `<nav class="comp-nav" aria-label="Competitivo">${tabs.map(([k, h, t]) => `<a class="${active === k ? 'active' : ''}" href="${h}">${t}</a>`).join('')}</nav>`;
+function compNav(active, game) {
+  game = game || localStorage.getItem('compGame') || 'pokemon';
+  localStorage.setItem('compGame', game);
+  const tabs = game === 'yugioh'
+    ? [['meta', '#/competitivo/yugioh', '📊 Metajuego'], ['torneos', '#/competitivo/yugioh/torneos', '🏟️ Torneos'],
+       ['cartas', '#/competitivo/cartas?juego=yugioh', '🃏 Cartas más usadas']]
+    : [['meta', '#/competitivo', '📊 Metajuego'], ['oficiales', '#/competitivo/oficiales', '🏟️ Oficiales'],
+       ['online', '#/competitivo/online', '🌐 Online'], ['cartas', '#/competitivo/cartas?juego=pokemon', '🃏 Cartas más usadas']];
+  tabs.push(['locales', '#/torneos', '⚔️ Torneos locales'], ['partidas', '#/partidas', '📝 Mis partidas']);
+  return `<div class="comp-top">
+    <div class="game-switch" role="tablist" aria-label="Juego">
+      <a role="tab" class="${game === 'pokemon' ? 'active pk' : ''}" href="#/competitivo">Pokémon</a>
+      <a role="tab" class="${game === 'yugioh' ? 'active yg' : ''}" href="#/competitivo/yugioh">Yu-Gi-Oh!</a>
+    </div>
+    <nav class="comp-nav" aria-label="Competitivo">${tabs.map(([k, h, t]) => `<a class="${active === k ? 'active' : ''}" href="${h}">${t}</a>`).join('')}</nav>
+  </div>`;
 }
 
 // Íconos de Pokémon de un deck (sprites de PokeAPI resueltos en el servidor)
@@ -2082,7 +2262,7 @@ async function viewMeta(params) {
   const srcLabel = { oficial: 'Torneos oficiales', online: 'Torneos online (Limitless)', macai: 'Torneos de Macai TCG' }[src];
 
   $app.innerHTML = `
-    ${compNav('meta')}
+    ${compNav('meta', 'pokemon')}
     <div class="page-head">
       <div><h1>📊 Metajuego de Pokémon TCG</h1>
         <p class="muted">Formato Estándar · actualizado ${new Date(m.updated_at).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}
@@ -2132,6 +2312,9 @@ async function viewMeta(params) {
       ${lineChart('metaChart', { labels: weeks.map(fmtShort), series: top6.map(d => ({ name: d.name, values: weeks.map(w => d.weekly.find(p => p.week === w)?.share ?? null) })) })}
     </section>` : ''}
 
+    ${src !== 'macai' && m.online?.matchups?.decks?.length ? matchupMatrix({ decks: m.online.matchups.decks, cells: m.online.matchups.cells,
+      keyOf: d => d.key, iconOf: d => deckIcons(d, sprites), note: 'Partidas de torneos online de Limitless (sin espejos) · pasa el cursor para ver el detalle' }) : ''}
+
     <section class="panel">
       <div class="panel-title"><h2>Ranking de decks</h2>
         <input type="search" id="deckFilter" class="mini-search" placeholder="Filtrar deck…" aria-label="Filtrar deck"></div>
@@ -2161,6 +2344,30 @@ async function viewMeta(params) {
   });
 }
 
+// % de victorias de cada deck (fila) contra cada rival (columna). Verde = favorable, rojo = desfavorable.
+// Con pocas partidas el número se atenúa (menos confiable).
+function matchupMatrix({ decks, cells, keyOf, iconOf, minGames = 10, note }) {
+  if (!decks?.length) return '';
+  const cell = (a, b) => {
+    if (keyOf(a) === keyOf(b)) return '<td class="mu mirror" title="Espejo">—</td>';
+    const c = cells?.[keyOf(a)]?.[keyOf(b)];
+    if (!c) return '<td class="mu none">·</td>';
+    const diff = c.wr - 50;
+    const tone = Math.abs(diff) < 3 ? 'even' : diff > 0 ? (diff >= 10 ? 'good2' : 'good') : (diff <= -10 ? 'bad2' : 'bad');
+    return `<td class="mu ${tone}${c.games < minGames ? ' low' : ''}" title="${esc(a.name)} contra ${esc(b.name)}: ${c.wr}% en ${c.games} partidas${c.first != null ? ` · yendo 1.º ${c.first}% / 2.º ${c.second}%` : ''}">
+      <b>${Math.round(c.wr)}%</b><small>${c.games}</small></td>`;
+  };
+  return `
+    <section class="panel">
+      <div class="panel-title"><h2>⚔️ Enfrentamientos: % de victorias</h2><span class="card-meta">${note}</span></div>
+      <div class="table-wrap"><table class="mu-table">
+        <thead><tr><th class="mu-corner">Deck ＼ Rival</th>${decks.map(b => `<th title="${esc(b.name)}"><div class="mu-head">${iconOf(b)}<span>${esc(b.name)}</span></div></th>`).join('')}</tr></thead>
+        <tbody>${decks.map(a => `<tr><th class="mu-row"><div class="deck-cell">${iconOf(a)}<b>${esc(a.name)}</b></div></th>${decks.map(b => cell(a, b)).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+      <p class="card-meta mu-legend"><span class="mu-chip good2"></span> muy favorable (60 %+) <span class="mu-chip good"></span> favorable <span class="mu-chip even"></span> parejo <span class="mu-chip bad"></span> desfavorable <span class="mu-chip bad2"></span> muy desfavorable (40 % o menos) · número pequeño = partidas · atenuado = menos de ${minGames} partidas</p>
+    </section>`;
+}
+
 const moverList = (list, sprites) => `<ul class="movers">${list.map(d => `
   <li>${deckIcons(d, sprites)}<span class="one-line">${esc(d.name)}</span>${trendBadge(d.trend)}<small>${pct(d.recent_share ?? d.share)}</small></li>`).join('')}</ul>`;
 
@@ -2169,7 +2376,7 @@ async function viewCompEvents(kind) {
   const data = kind === 'oficiales' ? m.official : m.online;
   const sprites = m.sprites || {};
   $app.innerHTML = `
-    ${compNav(kind)}
+    ${compNav(kind, 'pokemon')}
     <div class="page-head"><div>
       <h1>${kind === 'oficiales' ? '🏟️ Torneos oficiales recientes' : '🌐 Torneos online recientes'}</h1>
       <p class="muted">${kind === 'oficiales' ? 'Regionales, Internacionales y Special Events de Play! Pokémon (formato Estándar).' : 'Torneos de 24 jugadores o más en Limitless (últimas 4 semanas).'}</p></div></div>
@@ -2185,6 +2392,184 @@ async function viewCompEvents(kind) {
             <span class="one-line"><b>${esc(s.deck.name)}</b><small>${esc(s.name)}${s.record ? ` · ${s.record.wins}-${s.record.losses}-${s.record.ties}` : ''}</small></span></li>`).join('')}</ol>
       </article>`).join('') || '<div class="empty">Sin torneos por ahora.</div>'}</div>
     <p class="card-meta source-note">Fuente: <a href="https://limitlesstcg.com" target="_blank" rel="noopener">Limitless TCG</a>.</p>`;
+}
+
+// ---------- Competitivo: Yu-Gi-Oh! y cartas más usadas ----------
+
+let ygoCache = null, ygoCacheAt = 0;
+async function loadYgo() {
+  if (ygoCache && Date.now() - ygoCacheAt < 5 * 60e3) return ygoCache;
+  ygoCache = await api('/api/meta/yugioh'); ygoCacheAt = Date.now();
+  return ygoCache;
+}
+const cardsCache = {};
+async function loadCards(game) {
+  const c = cardsCache[game];
+  if (c && Date.now() - c.at < 5 * 60e3) return c.data;
+  const data = await api(`/api/meta/cards?game=${game}`);
+  cardsCache[game] = { data, at: Date.now() };
+  return data;
+}
+
+// Imagen de una carta de Yu-Gi-Oh! (guardada en nuestro almacenamiento) o una inicial si aún no está
+const ygoFace = (id, images, name = '?') => (id && images?.[id]
+  ? `<img class="ygo-face" src="${esc(images[id])}" alt="" loading="lazy">`
+  : `<span class="deck-ico fallback">${esc(String(name)[0] || '?')}</span>`);
+const tierBadge = t => (t ? `<span class="tier t${t}">Tier ${t}</span>` : '<span class="tier">—</span>');
+
+async function viewYgoMeta(params) {
+  const src = params.get('fuente') === 'torneos' ? 'torneos' : 'ladder';
+  const m = await loadYgo();
+  const img = m.images || {};
+  const L = m.omega_ladder || { decks: [] }, D = m.omega_daily || { decks: [], list: [] }, T = m.tournaments || { decks: [], list: [] };
+  const srcLabel = { ladder: 'Ladder TCG de YGO Omega', torneos: 'Torneos oficiales (YGOPRODeck)' }[src];
+
+  let body = '';
+  if (src === 'ladder') {
+    const decks = L.decks || [];
+    const tiers = [1, 2, 3].map(t => ({ t, list: decks.filter(d => d.tier === t) })).filter(g => g.list.length);
+    const bestWr = decks.filter(d => d.games >= 2000).sort((a, b) => (b.winrate ?? 0) - (a.winrate ?? 0))[0];
+    body = `
+      <div class="stat-tiles">
+        <div class="stat-tile"><span>Arquetipos analizados</span><b>${decks.length}</b><small>ladder TCG · rating Oro o más</small></div>
+        <div class="stat-tile"><span>Más jugado</span><b class="tile-deck">${decks[0] ? `${ygoFace(decks[0].face, img, decks[0].name)} ${esc(decks[0].name)}` : '—'}</b><small>${decks[0] ? `${pct(decks[0].share)} de las partidas` : ''}</small></div>
+        <div class="stat-tile"><span>Mejor win rate</span><b class="tile-deck">${bestWr ? `${ygoFace(bestWr.face, img, bestWr.name)} ${esc(bestWr.name)}` : '—'}</b><small>${bestWr ? `${pct(bestWr.winrate)} esperado` : ''}</small></div>
+        <div class="stat-tile"><span>Ventaja de ir primero</span><b>${decks[0]?.first_wr != null ? `+${(decks[0].first_wr - decks[0].second_wr).toFixed(0)} pts` : '—'}</b><small>${decks[0] ? `${esc(decks[0].name)}: ${pct(decks[0].first_wr, 0)} vs ${pct(decks[0].second_wr, 0)} (juego 1)` : ''}</small></div>
+      </div>
+      ${tiers.length ? `<section class="panel"><div class="panel-title"><h2>🏅 Tier list</h2><span class="card-meta">Según la fuerza estadística en la ladder (win rate ajustado por el nivel de los rivales)</span></div>
+        ${tiers.map(g => `<div class="tier-row"><div class="tier-label t${g.t}">T${g.t}</div><div class="tier-decks">${g.list.map(d => `
+          <div class="tier-deck" title="${esc(d.name)}">${ygoFace(d.face, img, d.name)}<b class="one-line">${esc(d.name)}</b><small>${pct(d.share)} · WR ${pct(d.winrate)}</small></div>`).join('')}</div></div>`).join('')}
+      </section>` : ''}
+      ${L.matchups?.decks?.length ? matchupMatrix({ decks: L.matchups.decks, cells: L.matchups.cells, keyOf: d => d.name,
+        iconOf: d => ygoFace(d.face, img, d.name), minGames: 30, note: 'Partidas de la ladder TCG de YGO Omega (8 arquetipos principales) · incluye % yendo primero y segundo' }) : ''}
+      <section class="panel"><div class="panel-title"><h2>Ranking de arquetipos</h2><input type="search" id="deckFilter" class="mini-search" placeholder="Filtrar…" aria-label="Filtrar arquetipo"></div>
+        <div class="table-wrap"><table class="meta-table"><thead><tr><th>#</th><th>Arquetipo</th><th>Uso</th><th>Tier</th>
+          <th title="Win rate esperado (intervalo 95 %)">Win rate</th><th title="Juego 1 yendo primero / segundo">1.º / 2.º</th><th>Partidas</th></tr></thead>
+        <tbody>${decks.map((d, i) => `<tr data-name="${esc(d.name.toLowerCase())}"><td class="rank">${i + 1}</td>
+          <td><div class="deck-cell">${ygoFace(d.face, img, d.name)}<b>${esc(d.name)}</b></div></td>
+          <td class="share-cell"><span class="share-bar"><i style="width:${Math.min(100, d.share * 100 / Math.max(1, decks[0].share))}%"></i></span>${pct(d.share)}</td>
+          <td>${tierBadge(d.tier)}</td>
+          <td>${pct(d.winrate)}<small class="muted"> ${d.wr_lo != null ? `(${d.wr_lo}–${d.wr_hi})` : ''}</small></td>
+          <td>${pct(d.first_wr, 0)} / ${pct(d.second_wr, 0)}</td>
+          <td>${Number(d.games || 0).toLocaleString('es-MX')}</td></tr>`).join('')}</tbody></table></div>
+        <p class="card-meta source-note">Fuente: <a href="https://omega.duelistsunite.org/statistics?ladder=tcg" target="_blank" rel="noopener">estadísticas de YGO Omega</a>${L.built_at ? ` (calculadas el ${new Date(L.built_at).toLocaleDateString('es-MX')})` : ''}.</p>
+      </section>`;
+  } else {
+    const decks = (src === 'diarios' ? D.decks : T.decks) || [];
+    body = `
+      <div class="stat-tiles">
+        <div class="stat-tile"><span>${src === 'diarios' ? 'Torneos diarios' : 'Listas de torneo'}</span><b>${src === 'diarios' ? D.events : T.lists}</b><small>${src === 'diarios' ? `${D.total} jugadores` : 'WCQ Regionales, YCS y más (top de cada evento)'}</small></div>
+        <div class="stat-tile"><span>Más jugado</span><b class="tile-deck">${decks[0] ? `${ygoFace(decks[0].face || decks[0].cover, img, decks[0].name)} ${esc(decks[0].name)}` : '—'}</b><small>${decks[0] ? pct(decks[0].share) : ''}</small></div>
+        <div class="stat-tile"><span>Más campeonatos</span><b class="tile-deck">${(() => { const w = [...decks].sort((a, b) => b.wins1st - a.wins1st || b.wins - a.wins)[0]; return w ? `${ygoFace(w.face || w.cover, img, w.name)} ${esc(w.name)}` : '—'; })()}</b><small>&nbsp;</small></div>
+        <div class="stat-tile"><span>${src === 'torneos' ? 'El que más sube' : 'Arquetipos distintos'}</span><b class="tile-deck">${src === 'torneos'
+          ? (() => { const r = decks.filter(d => d.lists >= 3).sort((a, b) => b.trend - a.trend)[0]; return r ? `${ygoFace(r.cover, img, r.name)} ${esc(r.name)}` : '—'; })() : decks.length}</b><small>&nbsp;</small></div>
+      </div>
+      <section class="panel"><div class="panel-title"><h2>Uso por arquetipo</h2><input type="search" id="deckFilter" class="mini-search" placeholder="Filtrar…" aria-label="Filtrar arquetipo"></div>
+        <div class="table-wrap"><table class="meta-table"><thead><tr><th>#</th><th>Arquetipo</th><th>Uso</th>
+          ${src === 'diarios' ? '<th>Win rate</th><th>Top 4</th><th>🏆</th>' : '<th title="Listas recientes contra las anteriores">Tendencia</th><th>Top 4</th><th>🏆</th>'}</tr></thead>
+        <tbody>${decks.slice(0, 40).map((d, i) => `<tr data-name="${esc(d.name.toLowerCase())}"><td class="rank">${i + 1}</td>
+          <td><div class="deck-cell">${ygoFace(d.face || d.cover, img, d.name)}<b>${esc(d.name)}</b></div></td>
+          <td class="share-cell"><span class="share-bar"><i style="width:${Math.min(100, d.share * 100 / Math.max(1, decks[0].share))}%"></i></span>${pct(d.share)}<small> · ${d.players ?? d.lists}</small></td>
+          ${src === 'diarios' ? `<td>${d.winrate != null ? pct(d.winrate) : '—'}</td>` : `<td>${trendBadge(d.trend)}</td>`}
+          <td>${d.top4 || 0}</td><td>${d.wins1st ?? d.wins ?? 0}</td></tr>`).join('')}</tbody></table></div>
+        <p class="card-meta source-note">Fuente: ${src === 'diarios' ? '<a href="https://omega.duelistsunite.org/tournaments" target="_blank" rel="noopener">torneos de YGO Omega</a>' : '<a href="https://ygoprodeck.com/category/format/tournament%20meta%20decks" target="_blank" rel="noopener">Tournament Meta Decks de YGOPRODeck</a>'}.</p>
+      </section>`;
+  }
+
+  $app.innerHTML = `
+    ${compNav('meta', 'yugioh')}
+    <div class="page-head">
+      <div><h1>⚡ Metajuego de Yu-Gi-Oh!</h1>
+        <p class="muted">Formato TCG · actualizado ${new Date(m.updated_at).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}${m.partial || m.stale ? ' · <span class="warn-text">algunos datos no se pudieron actualizar</span>' : ''}</p></div>
+      <div class="segmented dark" id="srcSel">${[['ladder', 'Omega ladder'], ['torneos', 'Torneos oficiales']].map(([k, t]) => `<button type="button" class="${src === k ? 'active' : ''}" data-src="${k}">${t}</button>`).join('')}</div>
+    </div>
+    ${body}`;
+  document.getElementById('srcSel').addEventListener('click', e => { const b = e.target.closest('[data-src]'); if (b) go(`#/competitivo/yugioh?fuente=${b.dataset.src}`); });
+  document.getElementById('deckFilter')?.addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    $app.querySelectorAll('.meta-table tbody tr').forEach(tr => { tr.hidden = q && !tr.dataset.name.includes(q); });
+  });
+}
+
+async function viewYgoEvents() {
+  const m = await loadYgo();
+  const img = m.images || {};
+  const T = m.tournaments || { list: [] };
+  $app.innerHTML = `
+    ${compNav('torneos', 'yugioh')}
+    <div class="page-head"><div><h1>🏟️ Torneos de Yu-Gi-Oh!</h1><p class="muted">Tops de torneos oficiales (WCQ Regionales, YCS) con la lista de cada jugador.</p></div></div>
+    
+    <div class="event-list">${(T.list || []).map(ev => `
+      <article class="panel event-card">
+        <div class="event-head"><div><h2>${esc(ev.name)}</h2><span class="card-meta">${ev.players ? `${ev.players} jugadores` : ''}</span></div></div>
+        <ol class="top8">${ev.top.map(s => `<li class="${s.place_n === 1 ? 'champ' : ''}"><span class="place">${s.place_n === 1 ? '🏆' : esc(String(s.placing).replace('Top ', 'T'))}</span>${ygoFace(s.cover, img, s.archetype)}
+          <span class="one-line"><b>${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.archetype)}</a>` : esc(s.archetype)}</b><small>${esc(s.name || '')}</small></span></li>`).join('')}</ol>
+      </article>`).join('') || '<div class="empty small">Sin listas por ahora.</div>'}</div>
+    <p class="card-meta source-note">Fuente: <a href="https://ygoprodeck.com" target="_blank" rel="noopener">YGOPRODeck</a> (Tournament Meta Decks).</p>`;
+}
+
+// Cartas más usadas: staples, side deck y techs, en general o por arquetipo
+const ROLE_LABEL = { core: 'Núcleo', flex: 'Flexible', tech: 'Tech' };
+async function viewCardUsage(params) {
+  const game = params.get('juego') === 'yugioh' ? 'yugioh' : 'pokemon';
+  const data = await loadCards(game);
+  const arch = params.get('deck') || '';
+  const archetypes = data.archetypes || [];
+  const A = archetypes.find(a => (a.key || a.name) === arch) || null;
+  const sections = game === 'pokemon'
+    ? [['', 'Todas'], ['pokemon', 'Pokémon'], ['trainer', 'Entrenadores'], ['energy', 'Energía']]
+    : [['main', 'Main deck'], ['extra', 'Extra deck'], ['side', 'Side deck']];
+  const sec = sections.some(([k]) => k === params.get('sec')) ? params.get('sec') : sections[0][0];
+  let list;
+  if (game === 'pokemon') list = (A ? A.cards : data.overall).filter(c => !sec || c.category === sec);
+  else list = (A ? A[sec] : data[sec]) || [];
+  const image = c => (game === 'pokemon' ? data.images?.[`${c.set}-${c.number}`] : data.images?.[c.id]) || '';
+  const total = A ? A.lists : data.lists;
+
+  $app.innerHTML = `
+    ${compNav('cartas', game)}
+    <div class="page-head">
+      <div><h1>🃏 Cartas más usadas · ${game === 'pokemon' ? 'Pokémon' : 'Yu-Gi-Oh!'}</h1>
+        <p class="muted">${A ? `En ${A.lists} listas de <b>${esc(A.name)}</b>` : `En ${total} listas de torneo`} · ${game === 'pokemon' ? 'torneos online de Limitless con listas registradas' : 'Tournament Meta Decks de YGOPRODeck'}</p></div>
+    </div>
+    <div class="panel usage-filters">
+      <div class="field"><label>Deck / arquetipo</label>
+        <select id="archSel"><option value="">Todos los decks (staples generales)</option>
+          ${archetypes.map(a => `<option value="${esc(a.key || a.name)}" ${(a.key || a.name) === arch ? 'selected' : ''}>${esc(a.name)} (${a.lists} listas)</option>`).join('')}</select></div>
+      <div class="field"><label>Sección</label><div class="chips" id="secSel">${sections.map(([k, t]) => `<button type="button" class="chip ${sec === k ? 'active' : ''}" data-sec="${k}">${t}</button>`).join('')}</div></div>
+      <div class="field"><label>Buscar</label><input type="search" id="cardFilter" placeholder="Nombre de la carta…"></div>
+    </div>
+    <div class="usage-legend card-meta">
+      ${A ? '<span><i class="role core"></i> <b>Núcleo</b>: en 85 % o más de las listas</span><span><i class="role flex"></i> <b>Flexible</b>: 30-85 %</span><span><i class="role tech"></i> <b>Tech</b>: menos de 30 % (opciones para el meta o el side)</span>'
+        : game === 'pokemon' ? '<span><b>% de listas</b> que la usan · <b>×</b> copias promedio · <b>Top</b>: % de las listas del top cut que la usan</span>'
+        : '<span><b>% de listas</b> que la usan · <b>×</b> copias promedio · <span class="badge staple">Staple</span> la usan muchos arquetipos distintos</span>'}
+    </div>
+    <div class="usage-grid">${list.map((c, i) => `
+      <div class="usage-card" data-name="${esc(c.name.toLowerCase())}">
+        <button type="button" class="uc-img" ${image(c) && game === 'pokemon' ? `data-zoom="${esc(image(c).replace('/low.webp', '/high.webp'))}" data-label="${esc(c.name)}"` : ''}>
+          ${image(c) ? `<img src="${esc(image(c))}" alt="${esc(c.name)}" loading="lazy">` : `<span class="no-img">${esc(c.name)}</span>`}
+          <span class="uc-rank">${i + 1}</span>
+          ${c.role ? `<span class="uc-role ${c.role}">${ROLE_LABEL[c.role]}</span>` : c.staple ? '<span class="uc-role staple">Staple</span>' : ''}
+        </button>
+        <b class="one-line" title="${esc(c.name)}">${esc(c.name)}</b>
+        <div class="uc-bar"><i style="width:${Math.min(100, c.pct)}%"></i></div>
+        <div class="uc-stats"><span><b>${pct(c.pct, 0)}</b> listas</span><span>×${c.avg}</span>${c.top_pct != null ? `<span title="% de las listas del top cut">Top ${pct(c.top_pct, 0)}</span>` : ''}</div>
+      </div>`).join('') || '<div class="empty small">Sin cartas para este filtro.</div>'}</div>
+    <p class="card-meta source-note">Fuente: ${game === 'pokemon' ? '<a href="https://play.limitlesstcg.com" target="_blank" rel="noopener">Limitless TCG</a> (listas de torneos online) · imágenes de TCGdex' : '<a href="https://ygoprodeck.com" target="_blank" rel="noopener">YGOPRODeck</a>'}.</p>`;
+
+  const nav = patch => {
+    const q = new URLSearchParams({ juego: game, ...(arch ? { deck: arch } : {}), ...(sec ? { sec } : {}), ...patch });
+    for (const [k, v] of [...q]) if (!v) q.delete(k);
+    go(`#/competitivo/cartas?${q}`);
+  };
+  document.getElementById('archSel').addEventListener('change', e => nav({ deck: e.target.value }));
+  document.getElementById('secSel').addEventListener('click', e => { const b = e.target.closest('[data-sec]'); if (b) nav({ sec: b.dataset.sec }); });
+  document.getElementById('cardFilter').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    $app.querySelectorAll('.usage-card').forEach(c => { c.hidden = q && !c.dataset.name.includes(q); });
+  });
+  const zoomable = [...$app.querySelectorAll('[data-zoom]')];
+  zoomable.forEach((b, i) => b.addEventListener('click', () => openLightbox(zoomable.map(x => ({ url: x.dataset.zoom, label: x.dataset.label })), i)));
 }
 
 // ---------- Mis partidas ----------
@@ -2761,6 +3146,8 @@ async function route(parts, params) {
       case 'admin': return await viewAdmin(params);
       case 'competitivo':
         if (parts[1] === 'oficiales' || parts[1] === 'online') return await viewCompEvents(parts[1]);
+        if (parts[1] === 'yugioh') return parts[2] === 'torneos' ? await viewYgoEvents() : await viewYgoMeta(params);
+        if (parts[1] === 'cartas') return await viewCardUsage(params);
         return await viewMeta(params);
       case 'partidas':
         if (parts[1] === 'nueva') return await viewMatchForm(params);

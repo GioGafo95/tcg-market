@@ -1445,3 +1445,101 @@ main { z-index: 1; }
 .top8 .deck-ico.fallback, .movers .deck-ico.fallback, .deck-cell .deck-ico.fallback, .pred-card .deck-ico.fallback { margin: 0 auto; }
 .stat-tile b.tile-deck { overflow-wrap: anywhere; }
 @media (max-width: 600px) { .stat-tile b.tile-deck { font-size: .92rem; } }
+
+/* ---------- Competitivo: selector de juego, Yu-Gi-Oh! y cartas más usadas ---------- */
+.comp-top { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; margin-bottom: 1.2rem; }
+.comp-top .comp-nav { margin: 0; }
+.game-switch { display: inline-flex; padding: 4px; border-radius: 999px; background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+.game-switch a { padding: .42rem .95rem; border-radius: 999px; color: var(--text-soft); font-family: var(--font-title); font-weight: 600; font-size: .92rem; }
+.game-switch a.active.pk { color: #3a2a00; background: linear-gradient(135deg, #ffe066, var(--pokemon)); }
+.game-switch a.active.yg { color: #fff; background: linear-gradient(135deg, #b794ff, var(--yugioh)); }
+@media (max-width: 760px) { .comp-top { gap: .5rem; } .comp-top .comp-nav { width: 100%; } }
+
+.ygo-face { width: 34px; height: 34px; border-radius: 8px; object-fit: cover; object-position: center 22%; flex: none; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+.stat-tile .ygo-face { width: 30px; height: 30px; }
+.tier { display: inline-block; font-weight: 900; font-size: .78rem; padding: .08rem .55rem; border-radius: 999px; color: var(--ink-soft); background: #f1ebfb; }
+.tier.t1 { color: #6b3d00; background: linear-gradient(135deg, #ffe08a, var(--gold)); }
+.tier.t2 { color: #2c3e66; background: #dfe8ff; }
+.tier.t3 { color: #6b4a2c; background: #f3e3d3; }
+.tier-row { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: .8rem; align-items: stretch; margin-bottom: .7rem; }
+.tier-label { display: grid; place-items: center; border-radius: 14px; font-family: var(--font-title); font-weight: 700; font-size: 1.3rem; color: var(--ink); background: #f1ebfb; }
+.tier-label.t1 { background: linear-gradient(135deg, #ffe08a, var(--gold)); color: #6b3d00; }
+.tier-label.t2 { background: #dfe8ff; color: #2c3e66; }
+.tier-label.t3 { background: #f3e3d3; color: #6b4a2c; }
+.tier-decks { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem; }
+.tier-deck { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: .5rem; align-items: center; padding: .45rem .55rem; border-radius: 12px; background: #fff; box-shadow: inset 0 0 0 1.5px #ece4f8; }
+.tier-deck > :first-child { grid-row: span 2; }
+.tier-deck b { font-family: var(--font-title); font-weight: 600; color: var(--ink); font-size: .92rem; }
+.tier-deck small { color: var(--ink-soft); font-size: .76rem; }
+
+.usage-filters { display: grid; grid-template-columns: minmax(0, 1.2fr) auto minmax(0, 1fr); gap: .8rem 1.2rem; align-items: end; padding: 1rem 1.2rem; margin-bottom: .8rem; }
+.usage-filters .field { margin: 0; }
+@media (max-width: 860px) { .usage-filters { grid-template-columns: 1fr; } }
+.usage-legend { display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; margin: 0 0 1rem; color: var(--text-soft) !important; }
+.usage-legend .role { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: middle; }
+.role.core, .uc-role.core { background: var(--green); }
+.role.flex, .uc-role.flex { background: #2a78d6; }
+.role.tech, .uc-role.tech { background: #e87ba4; }
+.badge.staple, .uc-role.staple { background: linear-gradient(135deg, #ffe08a, var(--gold)); color: #5a3d00; }
+.usage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 1rem; }
+.usage-card { display: flex; flex-direction: column; gap: .3rem; min-width: 0; padding: .5rem; border-radius: 14px; color: var(--ink); background: var(--cream); box-shadow: var(--shadow); }
+.uc-img { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 63 / 88; padding: 0; border: 0; border-radius: 9px; overflow: hidden; background: #efe6ff; cursor: default; }
+.uc-img[data-zoom] { cursor: zoom-in; }
+.uc-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.uc-img .no-img { padding: .5rem; font-weight: 800; font-size: .8rem; text-align: center; color: var(--ink-soft); }
+.uc-rank { position: absolute; left: 6px; top: 6px; min-width: 24px; padding: .05rem .4rem; border-radius: 999px; font-weight: 900; font-size: .78rem; color: #fff; background: rgba(30,20,64,.82); }
+.uc-role { position: absolute; right: 6px; top: 6px; padding: .08rem .5rem; border-radius: 999px; font-weight: 900; font-size: .72rem; color: #fff; }
+.uc-role.staple { color: #5a3d00; }
+.usage-card > b { font-family: var(--font-title); font-weight: 600; font-size: .92rem; }
+.uc-bar { height: 6px; border-radius: 3px; background: #f1ebfb; overflow: hidden; }
+.uc-bar i { display: block; height: 100%; border-radius: 3px; background: #2a78d6; }
+.uc-stats { display: flex; gap: .5rem; flex-wrap: wrap; font-size: .8rem; color: var(--ink-soft); }
+.uc-stats b { color: var(--ink); }
+@media (max-width: 600px) { .usage-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; } .usage-card { padding: .35rem; } .uc-stats { font-size: .72rem; gap: .3rem; } }
+
+/* ---------- Matriz de enfrentamientos ---------- */
+.mu-table { border-collapse: separate; border-spacing: 3px; font-size: .82rem; min-width: 100%; }
+.mu-table th { font-weight: 700; color: var(--ink-soft); }
+.mu-corner { text-align: left; font-size: .72rem; vertical-align: bottom; min-width: 150px; }
+.mu-head { display: flex; flex-direction: column; align-items: center; gap: .2rem; width: 74px; margin: 0 auto; }
+.mu-head span { font-size: .68rem; line-height: 1.1; text-align: center; max-height: 2.3em; overflow: hidden; color: var(--ink); }
+.mu-head .deck-icons img, .mu-head .ygo-face { width: 28px; height: 28px; margin-right: -6px; }
+.mu-row { text-align: left; position: sticky; left: 0; background: var(--cream); z-index: 1; }
+.mu-row .deck-cell { min-width: 150px; gap: .4rem; }
+.mu-row .deck-cell b { font-size: .82rem; }
+.mu-row .deck-icons { min-width: 44px; }
+.mu-row .deck-icons img, .mu-row .ygo-face { width: 26px; height: 26px; }
+.mu { width: 74px; height: 48px; text-align: center; border-radius: 8px; background: #f4f0fa; color: var(--ink); }
+.mu b { display: block; font-size: .95rem; }
+.mu small { display: block; font-size: .66rem; opacity: .75; }
+.mu.good { background: #d9f3e6; } .mu.good2 { background: #9fe0bf; }
+.mu.bad { background: #fde0e5; } .mu.bad2 { background: #f7a9b7; }
+.mu.even { background: #f1ebfb; }
+.mu.low { opacity: .55; }
+.mu.mirror, .mu.none { color: var(--ink-soft); background: #faf8fd; }
+.mu-legend { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; }
+.mu-chip { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: middle; }
+.mu-chip.good2 { background: #9fe0bf; } .mu-chip.good { background: #d9f3e6; } .mu-chip.even { background: #f1ebfb; }
+.mu-chip.bad { background: #fde0e5; } .mu-chip.bad2 { background: #f7a9b7; }
+
+/* ---------- Organizador de torneos ---------- */
+.org-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6rem; margin-bottom: .9rem; }
+.org-stats > div { padding: .6rem .8rem; border-radius: 12px; background: #f7f2ff; display: flex; flex-direction: column; }
+.org-stats span { font-size: .78rem; color: var(--ink-soft); font-weight: 700; }
+.org-stats b { font-family: var(--font-title); font-size: 1.3rem; color: var(--ink); }
+.org-stats small { font-size: .72rem; color: var(--ink-soft); }
+@media (max-width: 760px) { .org-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.org-tools { margin-top: 1rem; }
+.org-tools .t-actions { margin: .6rem 0 .3rem; }
+.swap-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .7rem 0 .3rem; font-weight: 700; color: var(--ink); }
+.swap-row select { width: auto; min-width: 150px; padding: .4rem .6rem; }
+.add-player { margin-top: 1.1rem; padding-top: 1rem; border-top: 1px solid #ece4f8; }
+.add-player label { display: block; font-weight: 800; color: var(--ink); margin-bottom: .4rem; }
+.player-results { display: grid; gap: .35rem; margin-top: .5rem; }
+.pr-row { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .45rem .6rem; border-radius: 10px; background: #fff; box-shadow: inset 0 0 0 1.5px #f0eaf9; }
+.pr-row .badge { margin-left: .3rem; }
+.t-form .switch { margin: .3rem 0 .6rem; }
+table.mine tr.dropped td { opacity: .55; }
+select.done { box-shadow: inset 0 0 0 1.5px #9fe3c4; }
+hr.soft { border: 0; border-top: 1px solid #ece4f8; margin: 1.2rem 0; }
+td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

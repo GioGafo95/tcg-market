@@ -190,6 +190,26 @@ const run = async () => {
   if (list2.data.tournaments.find(x => String(x.id) === String(t.id))?.status !== 'finished') throw new Error('el torneo no quedó terminado');
   ok('torneo finalizado');
 
+  // Torneo de Yu-Gi-Oh! (reglas KTS): el organizador agrega jugadores registrados con su CARD GAME ID
+  const cgid = () => String(Date.now()).slice(-10).padStart(10, '1');
+  await call('/api/auth/me/konami-id', { method: 'PUT', expect: 200, body: { konami_id: cgid() } });
+  const y = (await call('/api/tournaments', { method: 'POST', expect: 201, body: { name: 'Prueba KTS', game: 'yugioh', starts_at: '2026-12-01T18:00',
+    config: { open_registration: false, require_id: true } } })).data.tournament;
+  await call(`/api/tournaments/${y.id}/players`, { method: 'POST', expect: 201, body: { username: u } });
+  await call(`/api/tournaments/${y.id}/players`, { method: 'POST', expect: 400, body: { username: u2 } });   // sin CARD GAME ID
+  await call(`/api/tournaments/${y.id}`, { method: 'PUT', expect: 200, body: { config: { require_id: false } } });
+  await call(`/api/tournaments/${y.id}/players`, { method: 'POST', expect: 201, body: { username: u2 } });
+  await call(`/api/tournaments/${y.id}/rounds`, { method: 'POST', expect: 201 });
+  const yd = (await call(`/api/tournaments/${y.id}`, { expect: 200 })).data;
+  const ym = yd.rounds[0].matches[0];
+  await call(`/api/tournaments/${y.id}/matches/1/${ym.table_no}`, { method: 'PUT', expect: 400, body: { result: 'tie' } });
+  await call(`/api/tournaments/${y.id}/matches/1/${ym.table_no}`, { method: 'PUT', expect: 200, body: { result: 'p1' } });
+  const ys = (await call(`/api/tournaments/${y.id}`, { expect: 200 })).data;
+  if (ys.rules.game !== 'yugioh' || !/^\d{11}$/.test(ys.standings[0].kts || '')) throw new Error(`clasificación KTS incorrecta: ${JSON.stringify(ys.standings[0])}`);
+  await call(`/api/tournaments/${y.id}/rounds/current`, { method: 'DELETE', expect: 200 });
+  await call(`/api/tournaments/${y.id}`, { method: 'DELETE', expect: 200 });
+  ok(`torneo Yu-Gi-Oh!: jugadores agregados por el organizador, sin empates, número KTS ${ys.standings[0].kts}, ronda deshecha y borrado`);
+
   // ---------- Importar un TDF de TOM (datos ficticios): ronda 1 terminada, ronda 2 emparejada ----------
   const ghost = '7' + String(Date.now()).slice(-6);
   const pl = (id, f, l) => `<player userid="${id}"><firstname>${f}</firstname><lastname>${l}</lastname><birthdate>01/01/2000</birthdate></player>`;

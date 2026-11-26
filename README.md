@@ -28,10 +28,21 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
   guardado en caché 6 horas. Consulta el tipo de cambio en `GET /api/fx`.
   El precio se consulta en el servidor al guardar, así el vendedor no puede falsearlo.
 - Portada ilustrada (castillo gótico, un dragón que cruza el cielo y, tras él, un caballero calavera a caballo) y efecto holográfico 3D en las cartas.
-- **Torneos locales Pokémon** (`#/torneos`): cada jugador vincula su ID de Play! Pokémon y se inscribe; quien organiza
-  genera las rondas (emparejamiento suizo por puntos, sin revanchas, bye rotativo) y captura resultados. Cada jugador
-  ve en un aviso fijo contra quién juega y en qué mesa, su récord, su racha actual y su historial. El ID de jugador
-  solo lo ve quien organiza.
+- **Torneos locales de Pokémon y Yu-Gi-Oh!** (`#/torneos`, lógica en [tournaments.js](tournaments.js)), con las reglas
+  oficiales de cada juego:
+  - **Yu-Gi-Oh! (como KTS):** V 3 / D 0, sin empates (tiempo = doble derrota); desempate **AABBBCCCDDD** (puntos, % de
+    victorias de rivales, % de rivales de rivales y suma de cuadrados de las rondas perdidas), rondas y top cut según la
+    tabla oficial del *Tournament Policy* de KONAMI (4-8 jugadores: 3 rondas; 9-16: 4 + top 4; 17-32: 5 + top 4; 33-64:
+    6 + top 8…). Cada jugador vincula su **KONAMI CARD GAME ID** (10 dígitos) en su perfil.
+  - **Pokémon (como TOM):** V 3 / E 1 / D 0; desempates % de rivales (mín. 25 %, máx. 75 % si se retiró), % de rivales
+    de rivales y enfrentamiento directo; Play! Pokémon ID.
+  - Suizo: ronda 1 al azar, luego por puntos sin revanchas (con vuelta atrás), bye al peor clasificado sin bye. Las
+    rondas y el top cut se calculan solos con los jugadores al cerrar inscripciones (se pueden fijar a mano). Top cut de
+    eliminación directa sembrado 1 vs N, 2 vs N-1…
+  - El organizador: agrega **solo usuarios registrados** (búsqueda), con inscripción abierta o cerrada y requisito de ID
+    opcional; corrige cualquier resultado de cualquier ronda; rehace emparejamientos, intercambia jugadores, deshace la
+    ronda; da de baja o reactiva jugadores; inscripciones tardías; cambia rondas, top cut, formato y datos; reabre.
+  - Cada jugador ve su mesa, su rival, su récord, su racha y la clasificación con los desempates de su juego.
 - **Importar torneos oficiales desde TOM** (`#/torneos/importar`): se sube el archivo `.tdf` que genera TOM (el mismo
   que va a Play! Tools). Quedan sus rondas, top cut, resultados y la clasificación oficial, y el torneo aparece en el
   historial de cada jugador con su ID vinculado. Subido a mitad del evento, cada jugador ve su rival y mesa de la ronda.
@@ -58,10 +69,23 @@ Abre http://localhost:3000. En local los datos van a `data/tcg.db` (SQLite) y la
     [play.limitlesstcg.com](https://docs.limitlesstcg.com/developer/tournaments.html), sin clave) y los torneos de **Macai**
     (deck que cada jugador registra al inscribirse). Muestra uso %, tendencia (últimas 2 semanas contra las 2 anteriores),
     decks en ascenso y en caída, conversión a top cut, win rate, top 8, uso semanal en gráfica y una **predicción** para los
-    próximos torneos (uso ponderado por antigüedad, tendencia y fuerza de conversión). Lógica en [meta.js](meta.js).
+    próximos torneos (uso ponderado por antigüedad, tendencia y fuerza de conversión), además de la **matriz de
+    enfrentamientos** (% de victorias de cada deck contra cada otro, de los emparejamientos de los torneos online).
+    Lógica en [meta.js](meta.js).
     La "foto" del metajuego se guarda en la base de datos y se rehace con `POST /api/meta/refresh` (solo si tiene más de
     5 h); lo llama la tarea programada [meta-refresh.yml](.github/workflows/meta-refresh.yml) cada 6 h y el despliegue.
     Las visitas nunca esperan a Limitless.
+  - **Yu-Gi-Oh! competitivo** (`#/competitivo/yugioh`, lógica en [ygo-meta.js](ygo-meta.js)): estadísticas de la ladder TCG
+    de [YGO Omega](https://omega.duelistsunite.org/statistics?ladder=tcg) (uso, tier list, win rate esperado con intervalo,
+    win rate yendo primero y segundo, y % de victorias entre los 8 arquetipos principales) y las listas de
+    torneos oficiales (WCQ, YCS) de [YGOPRODeck](https://ygoprodeck.com) "Tournament Meta Decks". Omega no tiene API: se
+    leen sus páginas públicas pocas veces al día. Las imágenes de cartas se descargan una vez y se guardan en nuestro
+    almacenamiento (YGOPRODeck pide no enlazarlas).
+  - **Cartas más usadas** (`#/competitivo/cartas?juego=pokemon|yugioh`): staples generales, por sección (Pokémon /
+    Entrenador / Energía; Main / Extra / Side) y por arquetipo con su rol: **núcleo** (85 %+ de las listas), **flexible**
+    (30-85 %) y **tech** (menos de 30 %). Pokémon: listas de los torneos online de Limitless (miles de listas), con
+    imágenes de TCGdex. Yu-Gi-Oh!: listas de YGOPRODeck.
+  - Cada parte se actualiza por separado: `POST /api/meta/refresh?part=pokemon` y `?part=yugioh`.
   - **Mis partidas** (`#/partidas`): registro de partidas **físicas** (Bo1/Bo3, quién fue primero, premios, notas) y
     **online**, pegando el log de Pokémon TCG Live. El log se lee en [public/ptcgl-log.js](public/ptcgl-log.js) (navegador y
     servidor): jugadores, quién fue primero, mulligans, turno por turno (cartas, evoluciones, energía, ataques, KOs),
@@ -161,10 +185,18 @@ El dominio se toma de la variable del repo `QA_DOMAIN` (por defecto `tcg.macai.c
 | GET/POST | /api/decks | Mis decks / crear deck |
 | GET/PUT/DELETE | /api/decks/:id | Ver (dueño, admin o público), editar y borrar un deck |
 | GET | /api/meta | Metajuego (oficiales, online, Macai, predicción) |
-| POST | /api/meta/refresh | Rehace la foto del metajuego si tiene más de 5 h |
+| GET | /api/meta/yugioh | Metajuego de Yu-Gi-Oh! (Omega ladder y diarios, YGOPRODeck) |
+| GET | /api/meta/cards?game=pokemon (o yugioh) | Cartas más usadas (general, por sección y por arquetipo) |
+| POST | /api/meta/refresh?part=pokemon (o yugioh) | Rehace esa foto del metajuego si tiene más de 5 h |
 | GET/POST | /api/my-matches | Mis partidas / registrar (física o con log de TCG Live) |
 | GET/PUT/DELETE | /api/my-matches/:id | Ver (con log), editar y borrar una partida |
 | PUT | /api/tournaments/:id/deck | Mi deck en un torneo de la app |
+| PUT | /api/tournaments/:id | (organizador) Editar datos y configuración |
+| POST/DELETE | /api/tournaments/:id/players[/:userId] | (organizador) Agregar usuario registrado / quitar o dar de baja (?undo=1 reactiva) |
+| POST | /api/tournaments/:id/topcut | (organizador) Iniciar el top cut |
+| DELETE | /api/tournaments/:id/rounds/current | (organizador) Deshacer la ronda actual |
+| POST | /api/tournaments/:id/rounds/current/repair · /swap | (organizador) Rehacer emparejamientos · intercambiar dos jugadores |
+| PUT | /api/auth/me/konami-id | Vincular el KONAMI CARD GAME ID |
 | GET | /api/admin/overview | (admin) Resumen, cuentas y todas las publicaciones |
 | PUT/DELETE | /api/admin/users/:id | (admin) Editar perfil, rol `is_admin`, suspensión `blocked` / borrar cuenta |
 | GET | /healthz | Salud del servicio |

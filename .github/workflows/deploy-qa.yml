@@ -76,4 +76,6 @@ jobs:
         run: node scripts/smoke-test.mjs "${{ vars.QA_URL }}" --readonly
       - name: Preparar metajuego
         # Arma la foto del metajuego si aún no existe o tiene más de 5 h (no detiene el despliegue si Limitless falla)
-        run: curl -sS --max-time 60 -X POST "${{ vars.QA_URL }}/api/meta/refresh" || echo "No se pudo actualizar el metajuego ahora"
+        run: |
+          curl -sS --max-time 60 -X POST "${{ vars.QA_URL }}/api/meta/refresh?part=pokemon" || echo "No se pudo actualizar Pokémon ahora"
+          curl -sS --max-time 60 -X POST "${{ vars.QA_URL }}/api/meta/refresh?part=yugioh" || echo "No se pudo actualizar Yu-Gi-Oh! ahora"

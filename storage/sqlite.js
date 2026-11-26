@@ -135,15 +135,48 @@ for (const [name, def] of Object.entries({
   if (!tCols.includes(name)) db.exec(`ALTER TABLE tournaments ADD COLUMN ${name} ${def}`);
 }
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_tournaments_tdf ON tournaments(tdf_id) WHERE tdf_id IS NOT NULL');
+// Torneos de la app: juego (pokemon | yugioh), configuración (JSON) y fase (suizo | top cut)
+for (const [name, def] of Object.entries({ game: "TEXT NOT NULL DEFAULT 'pokemon'", config: "TEXT NOT NULL DEFAULT '{}'", phase: "TEXT NOT NULL DEFAULT 'swiss'" })) {
+  if (!db.prepare('PRAGMA table_info(tournaments)').all().some(c => c.name === name)) db.exec(`ALTER TABLE tournaments ADD COLUMN ${name} ${def}`);
+}
+// Jugador retirado (ronda en la que se dio de baja; 0 = activo) y partidas de top cut
+if (!db.prepare('PRAGMA table_info(tournament_players)').all().some(c => c.name === 'dropped'))
+  db.exec('ALTER TABLE tournament_players ADD COLUMN dropped INTEGER NOT NULL DEFAULT 0');
+if (!db.prepare('PRAGMA table_info(matches)').all().some(c => c.name === 'topcut'))
+  db.exec('ALTER TABLE matches ADD COLUMN topcut INTEGER NOT NULL DEFAULT 0');
+// La primera versión solo aceptaba p1 | p2 | tie: se reconstruye la tabla para admitir la doble derrota ('dl')
+{
+  const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'matches'").get().sql;
+  if (!sql.includes("'dl'")) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      db.exec('BEGIN');
+      db.exec(`CREATE TABLE matches_new (
+        tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+        round         INTEGER NOT NULL,
+        table_no      INTEGER NOT NULL,
+        player1_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        player2_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        result        TEXT CHECK (result IN ('p1', 'p2', 'tie', 'dl')),
+        topcut        INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (tournament_id, round, table_no))`);
+      db.exec('INSERT INTO matches_new (tournament_id, round, table_no, player1_id, player2_id, result, topcut) SELECT tournament_id, round, table_no, player1_id, player2_id, result, topcut FROM matches');
+      db.exec('DROP TABLE matches');
+      db.exec('ALTER TABLE matches_new RENAME TO matches');
+      db.exec('COMMIT');
+    } catch (err) { db.exec('ROLLBACK'); throw err; } finally { db.exec('PRAGMA foreign_keys = ON'); }
+  }
+}
 
 // Migraciones de columnas añadidas después de la primera versión
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const name of ['first_name', 'last_name', 'pokemon_id', 'role']) {
+for (const name of ['first_name', 'last_name', 'pokemon_id', 'role', 'konami_id']) {
   if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} TEXT DEFAULT ''`);
 }
 // Administración: role = 'admin' para administradores; blocked = 1 para cuentas suspendidas
 if (!userCols.includes('blocked')) db.exec('ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0');
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_pokemon_id ON users(pokemon_id) WHERE pokemon_id <> ''");
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_konami_id ON users(konami_id) WHERE konami_id <> ''");
 const cols = db.prepare('PRAGMA table_info(listings)').all().map(c => c.name);
 for (const [name, def] of Object.entries({
   ref_id: "TEXT DEFAULT ''", market_price: 'REAL', market_source: "TEXT DEFAULT ''", market_updated: 'TEXT',
@@ -209,7 +242,9 @@ const TOURNAMENT_SELECT = `
 // withData: el detalle incluye los datos importados del TDF; los listados no (son más pesados)
 function tournamentOut(t, withData) {
   const { tdf_data, tdf_players, ...rest } = t;
-  return { ...rest, created_at: iso(t.created_at), ...(withData && tdf_data ? { tdf_data: JSON.parse(tdf_data) } : {}) };
+  let config = {};
+  try { config = JSON.parse(rest.config || '{}'); } catch { /* configuración vacía */ }
+  return { ...rest, config, created_at: iso(t.created_at), ...(withData && tdf_data ? { tdf_data: JSON.parse(tdf_data) } : {}) };
 }
 
 const LISTING_FIELDS =['game', 'card_name', 'set_name', 'card_code', 'rarity', 'condition', 'language', 'price',
@@ -370,6 +405,19 @@ export const repo = {
   },
 
   // ---------- ID de jugador Pokémon (Play! Pokémon) ----------
+  async setKonamiId(userId, konamiId) {
+    const taken = konamiId && db.prepare('SELECT 1 FROM users WHERE konami_id = ? AND id <> ?').get(konamiId, userId);
+    if (taken) { const e = new Error('duplicate'); e.code = 'DUPLICATE'; throw e; }
+    db.prepare('UPDATE users SET konami_id = ? WHERE id = ?').run(konamiId, userId);
+    return this.getUser(userId);
+  },
+  // Búsqueda de usuarios registrados (para que el organizador agregue jugadores)
+  async searchUsers(q, limit = 15) {
+    const like = `%${q}%`;
+    return db.prepare(`SELECT * FROM users WHERE blocked = 0 AND (username LIKE ? OR display_name LIKE ?) ORDER BY username LIMIT ?`)
+      .all(like, like, limit).map(userOut);
+  },
+
   async setPokemonId(userId, pokemonId) {
     const taken = pokemonId && db.prepare('SELECT 1 FROM users WHERE pokemon_id = ? AND id <> ?').get(pokemonId, userId);
     if (taken) { const e = new Error('duplicate'); e.code = 'DUPLICATE'; throw e; }
@@ -379,8 +427,8 @@ export const repo = {
 
   // ---------- Torneos ----------
   async createTournament(organizerId, t) {
-    const { lastInsertRowid } = db.prepare(`INSERT INTO tournaments (organizer_id, name, location, starts_at, rounds)
-      VALUES (?, ?, ?, ?, ?)`).run(organizerId, t.name, t.location, t.starts_at, t.rounds);
+    const { lastInsertRowid } = db.prepare(`INSERT INTO tournaments (organizer_id, name, location, starts_at, rounds, game, config)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(organizerId, t.name, t.location, t.starts_at, t.rounds, t.game || 'pokemon', JSON.stringify(t.config || {}));
     return this.getTournament(lastInsertRowid);
   },
 
@@ -430,15 +478,23 @@ export const repo = {
     return new Map(rows.map(u => [u.pokemon_id, userOut(u)]));
   },
 
-  async updateTournament(id, { status, current_round }) {
-    db.prepare('UPDATE tournaments SET status = ?, current_round = ? WHERE id = ?').run(status, current_round, Number(id));
+  // Actualiza solo los campos indicados
+  async updateTournament(id, patch) {
+    const allowed = ['status', 'current_round', 'name', 'location', 'starts_at', 'rounds', 'game', 'config', 'phase'];
+    const keys = allowed.filter(k => patch[k] !== undefined);
+    if (keys.length) db.prepare(`UPDATE tournaments SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...keys.map(k => (k === 'config' ? JSON.stringify(patch[k]) : patch[k])), Number(id));
     return this.getTournament(id);
+  },
+  async deleteRoundMatches(id, round) { db.prepare('DELETE FROM matches WHERE tournament_id = ? AND round = ?').run(Number(id), round); },
+  async setPlayerDropped(id, userId, round) {
+    db.prepare('UPDATE tournament_players SET dropped = ? WHERE tournament_id = ? AND user_id = ?').run(round, Number(id), userId);
   },
 
   async deleteTournament(id) { db.prepare('DELETE FROM tournaments WHERE id = ?').run(Number(id)); },
 
   async getTournamentPlayers(id) {
-    return db.prepare(`SELECT p.user_id, p.joined_at, p.deck, u.username, u.display_name, u.location, u.pokemon_id
+    return db.prepare(`SELECT p.user_id, p.joined_at, p.deck, p.dropped, u.username, u.display_name, u.location, u.pokemon_id, u.konami_id
       FROM tournament_players p JOIN users u ON u.id = p.user_id WHERE p.tournament_id = ? ORDER BY p.joined_at, p.user_id`)
       .all(Number(id)).map(p => ({ ...p, joined_at: iso(p.joined_at) }));
   },
@@ -456,9 +512,9 @@ export const repo = {
   },
 
   async addMatches(id, matches) {
-    const ins = db.prepare(`INSERT INTO matches (tournament_id, round, table_no, player1_id, player2_id, result)
-      VALUES (?, ?, ?, ?, ?, ?)`);
-    for (const m of matches) ins.run(Number(id), m.round, m.table_no, m.player1_id, m.player2_id ?? null, m.result ?? null);
+    const ins = db.prepare(`INSERT INTO matches (tournament_id, round, table_no, player1_id, player2_id, result, topcut)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    for (const m of matches) ins.run(Number(id), m.round, m.table_no, m.player1_id, m.player2_id ?? null, m.result ?? null, m.topcut ? 1 : 0);
   },
 
   async setMatchResult(id, round, tableNo, result) {

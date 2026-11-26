@@ -35,7 +35,7 @@ async function pool(items, n, fn) {
   const out = new Array(items.length);
   let i = 0;
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
-    while (i < items.length) { const k = i++; out[k] = await fn(items[k], k).catch(() => null); }
+    while (i < items.length) { const k = i++; out[k] = await Promise.resolve().then(() => fn(items[k], k)).catch(() => null); }
   }));
   return out;
 }
@@ -101,14 +101,47 @@ async function fetchOnline() {
     .sort((a, b) => b.date.localeCompare(a.date));
   // De a 2 peticiones a la vez y con tope de tiempo (si se acaba, se usan los torneos ya leídos)
   const standings = await pool(chosen, 2, t => (Date.now() - started > BUILD_DEADLINE_MS ? null : get(`${PLAY_API}/tournaments/${t.id}/standings`)));
+  // Emparejamientos (para el % de victorias de un deck contra otro) de los 10 torneos más grandes
+  const pairings = await pool(chosen, 2, (t, i) => (i >= 10 || Date.now() - started > BUILD_DEADLINE_MS ? null : get(`${PLAY_API}/tournaments/${t.id}/pairings`)));
   return chosen.map((t, i) => ({
     id: t.id, name: t.name, date: t.date.slice(0, 10), players: t.players,
     url: `https://play.limitlesstcg.com/tournament/${t.id}/standings`,
     standings: (standings[i] || []).filter(s => s.deck?.id && s.deck.id !== 'other').map(s => ({
-      placing: s.placing, name: s.name, country: s.country,
+      placing: s.placing, name: s.name, country: s.country, player: s.player,
       deck: { id: s.deck.id, name: s.deck.name, icons: s.deck.icons || [] }, record: s.record || null,
+      list: s.decklist && typeof s.decklist === 'object' ? s.decklist : null,
     })),
+    pairings: Array.isArray(pairings[i]) ? pairings[i] : null,
   })).filter(t => t.standings.length >= 8);
+}
+
+// % de victorias de cada deck contra cada otro (partidas online, sin espejos). Victoria = 1, empate = 1/2.
+export function matchupMatrix(online, top = 10) {
+  const usage = new Map();
+  online.forEach(t => t.standings.forEach(s => usage.set(s.deck.id, (usage.get(s.deck.id) || { deck: s.deck, n: 0 })) && usage.get(s.deck.id).n++));
+  const decks = [...usage.values()].sort((a, b) => b.n - a.n).slice(0, top).map(x => x.deck);
+  const ids = new Set(decks.map(d => d.id));
+  const cells = {};
+  for (const t of online) {
+    if (!t.pairings) continue;
+    const deckOf = new Map(t.standings.map(s => [s.player, s.deck.id]));
+    for (const p of t.pairings) {
+      const a = deckOf.get(p.player1), b = deckOf.get(p.player2);
+      if (!a || !b || a === b || !ids.has(a) || !ids.has(b) || p.winner === undefined || p.winner === null) continue;
+      const add = (x, y, r) => { cells[x] ??= {}; cells[x][y] ??= { w: 0, l: 0, t: 0 }; cells[x][y][r]++; };
+      if (p.winner === 0) { add(a, b, 't'); add(b, a, 't'); }
+      else if (p.winner === p.player1) { add(a, b, 'w'); add(b, a, 'l'); }
+      else if (p.winner === p.player2) { add(a, b, 'l'); add(b, a, 'w'); }
+    }
+  }
+  const out = {};
+  for (const a of decks) for (const b of decks) {
+    const c = cells[a.id]?.[b.id];
+    if (!c) continue;
+    const g = c.w + c.l + c.t;
+    (out[a.id] ??= {})[b.id] = { games: g, wr: Math.round((c.w + c.t / 2) / g * 1000) / 10 };
+  }
+  return { decks: decks.map(d => ({ key: d.id, name: d.name, icons: d.icons })), cells: out };
 }
 
 // ---------- Agregación ----------
@@ -259,6 +292,81 @@ export async function resolveSprites(names, known = {}) {
 
 // ---------- Construcción de la foto completa ----------
 
+// ---------- Cartas más usadas (listas de los torneos online) ----------
+
+const CAT = { pokemon: 'pokemon', trainer: 'trainer', energy: 'energy' };
+// Clasificación dentro de un arquetipo: núcleo (casi todas las listas), flexible y "tech" (pocas listas)
+const roleOf = pct => (pct >= 85 ? 'core' : pct >= 30 ? 'flex' : 'tech');
+
+function cardStats(lists, { topCut = new Set() } = {}) {
+  const map = new Map();
+  for (const [i, l] of lists.entries()) {
+    const seen = new Set();
+    for (const cat of Object.keys(CAT)) for (const c of l.list[cat] || []) {
+      const key = c.name;
+      if (!map.has(key)) map.set(key, { name: c.name, category: CAT[cat], set: c.set, number: c.number, decks: 0, copies: 0, top: 0, prints: new Map() });
+      const r = map.get(key);
+      const pk = `${c.set}-${c.number}`;
+      r.prints.set(pk, (r.prints.get(pk) || 0) + c.count);
+      if (!seen.has(key)) { r.decks++; if (topCut.has(i)) r.top++; seen.add(key); }
+      r.copies += c.count;
+    }
+  }
+  const n = lists.length || 1, nTop = topCut.size || 1;
+  return [...map.values()].map(r => {
+    const [print] = [...r.prints].sort((a, b) => b[1] - a[1])[0];
+    const [set, number] = print.split('-');
+    return { name: r.name, category: r.category, set, number, pct: Math.round(r.decks / n * 1000) / 10,
+             avg: Math.round(r.copies / r.decks * 10) / 10, top_pct: topCut.size ? Math.round(r.top / nTop * 1000) / 10 : null };
+  }).sort((a, b) => b.pct - a.pct || b.avg - a.avg);
+}
+
+export function pokemonCardUsage(online) {
+  const lists = [];
+  const topCut = new Set();
+  for (const ev of online) {
+    const cut = Math.max(8, Math.round(ev.standings.length * 0.125));
+    for (const s of ev.standings) {
+      if (!s.list) continue;
+      if (s.placing && s.placing <= cut) topCut.add(lists.length);
+      lists.push({ deck: s.deck, list: s.list });
+    }
+  }
+  const overall = cardStats(lists, { topCut });
+  // Por arquetipo (los 14 con más listas)
+  const byDeck = new Map();
+  lists.forEach(l => { if (!byDeck.has(l.deck.id)) byDeck.set(l.deck.id, { deck: l.deck, lists: [] }); byDeck.get(l.deck.id).lists.push(l); });
+  const archetypes = [...byDeck.values()].filter(a => a.lists.length >= 5).sort((a, b) => b.lists.length - a.lists.length).slice(0, 14)
+    .map(a => ({ key: a.deck.id, name: a.deck.name, icons: a.deck.icons, lists: a.lists.length,
+                 cards: cardStats(a.lists).slice(0, 45).map(c => ({ ...c, role: roleOf(c.pct) })) }));
+  return { lists: lists.length, events: online.length, overall: overall.slice(0, 120), archetypes };
+}
+
+// Imágenes de cartas por código de expansión + número (TCGdex). Se resuelven poco a poco y quedan en caché.
+async function resolveCardImages(cards, known = {}, setIndex = {}) {
+  const out = { ...known };
+  const need = cards.filter(c => c.set && c.number && !out[`${c.set}-${c.number}`]);
+  const codes = [...new Set(need.map(c => c.set))].slice(0, 12);
+  if (!codes.length) return { images: out, setIndex };
+  // Índice abreviatura → id de expansión de TCGdex (las expansiones recientes; se guarda)
+  const idx = { ...setIndex };
+  if (codes.some(c => !idx[c])) {
+    try {
+      const sets = await get('https://api.tcgdex.net/v2/en/sets');
+      const recent = sets.filter(x => /^(sv|me|30th|svp|mep)/.test(x.id) && !Object.values(idx).includes(x.id)).slice(-40);
+      await pool(recent, 3, async st => { const d = await get(`https://api.tcgdex.net/v2/en/sets/${st.id}`); if (d.abbreviation?.official) idx[d.abbreviation.official] = d.id; });
+    } catch { /* sin índice: se reintenta en la próxima actualización */ }
+  }
+  await pool(codes.filter(c => idx[c]), 3, async code => {
+    const d = await get(`https://api.tcgdex.net/v2/en/sets/${idx[code]}`);
+    for (const c of need.filter(x => x.set === code)) {
+      const card = (d.cards || []).find(k => parseInt(k.localId, 10) === parseInt(c.number, 10) && /^\d/.test(k.localId));
+      if (card?.image) out[`${code}-${c.number}`] = `${card.image}/low.webp`;
+    }
+  });
+  return { images: out, setIndex: idx };
+}
+
 export async function buildSnapshot(previous = null) {
   const [official, online] = await Promise.all([
     fetchOfficial().catch(err => { console.error('meta oficial:', err.message); return null; }),
@@ -272,10 +380,19 @@ export async function buildSnapshot(previous = null) {
   }));
   // Si una fuente falla, se conserva su parte de la foto anterior
   const off = official ? { ...aggregate(official), list: summarize(official, false) } : previous?.official || { decks: [], list: [], weeks: [], total: 0, events: 0 };
-  const onl = online ? { ...aggregate(online), list: summarize(online, true) } : previous?.online || { decks: [], list: [], weeks: [], total: 0, events: 0 };
+  const onl = online ? { ...aggregate(online), list: summarize(online, true), matchups: matchupMatrix(online) } : previous?.online || { decks: [], list: [], weeks: [], total: 0, events: 0 };
   const predictions = official && online ? predict(official, online) : previous?.predictions || predict(official || [], online || []);
   const icons = [...off.decks, ...onl.decks].flatMap(d => d.icons || []);
   const sprites = await resolveSprites(icons, previous?.sprites || {});
+  // Cartas más usadas: se guardan aparte (otra entrada en la base de datos) por tamaño
+  let cards = null;
+  if (online) {
+    cards = pokemonCardUsage(online);
+    const all = [...cards.overall, ...cards.archetypes.flatMap(a => a.cards)];
+    const { images, setIndex } = await resolveCardImages(all, previous?._cardImages || {}, previous?._setIndex || {})
+      .catch(() => ({ images: previous?._cardImages || {}, setIndex: previous?._setIndex || {} }));
+    cards.images = images; cards._setIndex = setIndex;
+  }
   return { updated_at: new Date().toISOString(), official: off, online: onl, predictions, sprites,
-           partial: !official || !online };
+           partial: !official || !online, _cards: cards };
 }
